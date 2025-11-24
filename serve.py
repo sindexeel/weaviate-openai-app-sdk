@@ -14,6 +14,13 @@ import weaviate
 from weaviate.classes.init import Auth
 from weaviate.classes.query import MetadataQuery
 
+from fastmcp_apps_sdk import (
+    widget,
+    build_widget_tool_response,
+    register_decorated_widgets,
+)
+
+
 # In-memory stato Vertex
 _VERTEX_HEADERS: Dict[str, str] = {}
 _VERTEX_REFRESH_THREAD_STARTED = False
@@ -312,6 +319,8 @@ _MCP_DESCRIPTION = _load_text_source("MCP_DESCRIPTION", _MCP_DESCRIPTION_FILE)
 
 mcp = FastMCP(_MCP_SERVER_NAME)
 
+register_decorated_widgets(mcp)
+
 def _apply_mcp_metadata():
     try:
         info = getattr(mcp, "server_info", None)
@@ -330,6 +339,28 @@ def _apply_mcp_metadata():
 
 
 _apply_mcp_metadata()
+
+@widget(
+    identifier="image-search-widget",
+    title="Weaviate image search",
+    template_uri="ui://widget/image-search.html",
+    invoking="Apro il widget di ricerca immagini...",
+    invoked="Widget immagini pronto.",
+    html=(
+        '<div id="root"></div>\n'
+        '<script type="module" src="https://weaviate-openai-app-sdk.onrender.com/assets/index.js"></script>'
+    ),
+    description=(
+        "Widget per caricare un'immagine e fare image_search_vertex "
+        "sulla collection Sinde nel cluster Weaviate."
+    ),
+)
+def image_search_widget() -> dict:
+    # Puoi passare stato iniziale se ti serve, qui nulla
+    return build_widget_tool_response(
+        response_text="Ho aperto il widget di ricerca immagini.",
+        structured_content={},
+    )
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health(_request):

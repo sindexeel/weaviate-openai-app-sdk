@@ -1,12 +1,34 @@
+// src/ImageSearchWidget.tsx
 import React, { useState } from "react";
-import axios from "axios";
-import { useOpenAI } from "@openai/apps";
 
-export function ImageSearchWidget() {
-  const { tools } = useOpenAI();
+// URL base del tuo server MCP (quello con serve.py)
+const MCP_BASE_URL = "https://weaviate-openai-app-sdk.onrender.com";
+
+declare global {
+  interface Window {
+    openai?: {
+      // API esposta da ChatGPT dentro il widget
+      callTool?: (toolName: string, args: Record<string, any>) => Promise<any>;
+    };
+  }
+}
+
+type SearchResult = {
+  uuid?: string;
+  properties?: {
+    name?: string;
+    source_pdf?: string;
+    page_index?: number;
+    [key: string]: any;
+  };
+  distance?: number;
+};
+
+export const ImageSearchWidget: React.FC = () => {
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const [results, setResults] = useState<any[] | null>(null);
+  const [results, setResults] = useState<SearchResult[] | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0] ?? null;
@@ -22,68 +44,129 @@ export function ImageSearchWidget() {
     }
 
     try {
-      setStatus("Caricamento immagine...");
+      setIsLoading(true);
+      setStatus("Caricamento dell'immagine in corso...");
+
+      // 1️⃣ Upload immagine al tuo endpoint /upload-image (HTTP, non MCP tool)
       const form = new FormData();
-      form.append("image", file); // deve chiamarsi 'image' per /upload-image
+      form.append("image", file); // il campo deve chiamarsi "image"
 
-      // 1. Upload al tuo MCP server (endpoint HTTP, non tool)
-      const uploadResp = await axios.post(
-        "https://weaviate-openai-app-sdk.onrender.com/upload-image",
-        form,
-        { headers: { "Content-Type": "multipart/form-data" } }
-      );
-
-      const imageId = uploadResp.data.image_id as string;
-      setStatus(`Immagine caricata. image_id=${imageId}. Sto cercando...`);
-
-      // 2. Chiedi a ChatGPT di usare il tool MCP image_search_vertex
-      const toolResult = await tools.callTool({
-        name: "image_search_vertex", // deve essere EXACT come nel serve.py
-        arguments: {
-          collection: "Sinde", // come hai forzato in hybrid_search/image_search_vertex
-          image_id: imageId,
-          limit: 5
-        }
+      const uploadResp = await fetch(`${MCP_BASE_URL}/upload-image`, {
+        method: "POST",
+        body: form,
       });
 
-      // tools.callTool ti restituisce il contenuto della risposta del tool
-      // Se il tool ritorna { count, results }, ci aspettiamo qualcosa tipo:
-      // { type: "json", value: { count: ..., results: [...] } } a seconda del client
-      // Per semplicità assumiamo che toolResult.content sia già l'oggetto JSON
-      // (in pratica controlla una volta la struttura e aggiusta qui).
-      // In un caso semplice:
-      //   toolResult = { content: { count: n, results: [...] } }
-      // Qui facciamo una cosa difensiva:
-      const data = (toolResult as any)?.content ?? toolResult;
-      setResults(data.results ?? []);
+      if (!uploadResp.ok) {
+        const text = await uploadResp.text();
+        throw new Error(
+          `Upload fallito (${uploadResp.status}): ${text || "errore sconosciuto"}`
+        );
+      }
+
+      const uploadData = await uploadResp.json();
+      const imageId = uploadData.image_id as string | undefined;
+
+      if (!imageId) {
+        throw new Error("Risposta /upload-image senza image_id");
+      }
+
+      setStatus(`Immagine caricata (image_id = ${imageId}). Avvio la ricerca...`);
+
+      // 2️⃣ Chiedi a ChatGPT di chiamare il tool MCP "image_search_vertex"
+      const openai = window.openai;
+
+      if (!openai?.callTool) {
+        // Siamo probabilmente in sviluppo locale, fuori da ChatGPT
+        setStatus(
+          "window.openai.callTool non disponibile (sei in dev locale?). Controlla la console."
+        );
+        console.warn(
+          "window.openai.callTool non esiste. Questa parte funzionerà solo dentro ChatGPT come widget."
+        );
+        return;
+      }
+
+      const toolResponse = await openai.callTool("image_search_vertex", {
+        collection: "Sinde", // come nel tuo serve.py
+        image_id: imageId,
+        limit: 5,
+      });
+
+      // La struttura precisa può variare; iniziamo gestendo i casi più semplici
+      let payload: any = toolResponse;
+
+      // Alcuni client mettono i dati in .structuredContent o .content
+      if (payload?.structuredContent) {
+        payload = payload.structuredContent;
+      } else if (payload?.content) {
+        payload = payload.content;
+      }
+
+      const r =
+        payload?.results ??
+        (Array.isArray(payload) ? payload : payload?.data?.results ?? []);
+
+      setResults(Array.isArray(r) ? r : []);
       setStatus("Ricerca completata.");
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setStatus("Errore durante upload o ricerca.");
+      setStatus(`Errore: ${err?.message || String(err)}`);
+      setResults(null);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   return (
-    <div style={{ marginTop: 12 }}>
-      <input type="file" accept="image/*" onChange={handleFileChange} />
-      <button onClick={handleUploadAndSearch} disabled={!file} style={{ marginLeft: 8 }}>
-        Carica e cerca
-      </button>
+    <div
+      style={{
+        border: "1px solid #ddd",
+        borderRadius: 8,
+        padding: 12,
+        fontSize: 14,
+      }}
+    >
+      <div style={{ marginBottom: 8 }}>
+        <input type="file" accept="image/*" onChange={handleFileChange} />
+        <button
+          onClick={handleUploadAndSearch}
+          disabled={!file || isLoading}
+          style={{
+            marginLeft: 8,
+            padding: "6px 12px",
+            borderRadius: 6,
+            border: "1px solid #ccc",
+            cursor: !file || isLoading ? "default" : "pointer",
+          }}
+        >
+          {isLoading ? "Attendere..." : "Carica e cerca"}
+        </button>
+      </div>
 
-      {status && <p style={{ marginTop: 8 }}>{status}</p>}
+      {status && <p style={{ marginTop: 4 }}>{status}</p>}
 
       {results && (
-        <div style={{ marginTop: 16 }}>
-          <h3>Risultati</h3>
-          {results.length === 0 && <p>Nessun risultato.</p>}
+        <div style={{ marginTop: 12 }}>
+          <h3 style={{ marginTop: 0, fontSize: 15 }}>Risultati</h3>
+          {results.length === 0 && <p>Nessun risultato trovato.</p>}
           {results.length > 0 && (
-            <ul>
-              {results.map((r, i) => (
-                <li key={i}>
-                  <code>{r.uuid}</code>{" "}
-                  {r.properties?.name && <span>- {r.properties.name}</span>}
+            <ul style={{ paddingLeft: 18 }}>
+              {results.map((r, idx) => (
+                <li key={idx} style={{ marginBottom: 6 }}>
+                  <div>
+                    <code>{r.uuid}</code>
+                  </div>
+                  {r.properties?.name && (
+                    <div>Nome: {r.properties.name}</div>
+                  )}
                   {typeof r.distance === "number" && (
-                    <span> (distance: {r.distance.toFixed(3)})</span>
+                    <div>Distanza: {r.distance.toFixed(3)}</div>
+                  )}
+                  {r.properties?.source_pdf && (
+                    <div>PDF: {r.properties.source_pdf}</div>
+                  )}
+                  {typeof r.properties?.page_index === "number" && (
+                    <div>Pagina: {r.properties.page_index}</div>
                   )}
                 </li>
               ))}
@@ -93,4 +176,4 @@ export function ImageSearchWidget() {
       )}
     </div>
   );
-}
+};
