@@ -423,6 +423,20 @@ def image_search_widget() -> dict:
         structured_content={},
     )
 
+
+@mcp.tool
+def open_image_search_widget() -> Dict[str, Any]:
+    """
+    Apre il widget interattivo per la ricerca di immagini.
+    Usa questo tool per aprire un'interfaccia grafica dove puoi:
+    - Caricare un'immagine dal tuo dispositivo
+    - Cercare immagini simili nella collection Sinde
+    - Visualizzare i risultati in modo interattivo
+    
+    Il widget si aprirà nell'interfaccia di ChatGPT e potrai usarlo direttamente.
+    """
+    return image_search_widget()
+
 @mcp.custom_route("/health", methods=["GET"])
 async def health(_request):
     return JSONResponse({"status": "ok", "service": "weaviate-mcp-http"})
