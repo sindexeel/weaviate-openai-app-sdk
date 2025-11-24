@@ -32,6 +32,8 @@ _UPLOADED_IMAGES: Dict[str, Dict[str, Any]] = {}
 _BASE_DIR = Path(__file__).resolve().parent
 _DEFAULT_PROMPT_PATH = _BASE_DIR / "prompts" / "instructions.md"
 _DEFAULT_DESCRIPTION_PATH = _BASE_DIR / "prompts" / "description.txt"
+_WIDGET_DIST_DIR = _BASE_DIR / "weaviate-image-app" / "dist"
+_BASE_URL = os.environ.get("BASE_URL", "https://weaviate-openai-app-sdk.onrender.com")
 
 
 def _build_vertex_header_map(token: str) -> Dict[str, str]:
@@ -340,23 +342,82 @@ def _apply_mcp_metadata():
 
 _apply_mcp_metadata()
 
+
+def _load_widget_html() -> str:
+    """Carica il widget HTML buildato dall'app React."""
+    widget_html_path = _WIDGET_DIST_DIR / "index.html"
+    
+    if not widget_html_path.exists():
+        # Fallback a HTML minimo se il build non esiste
+        return f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Search Widget</title>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="module" src="{_BASE_URL}/assets/index.js"></script>
+</body>
+</html>'''
+    
+    # Leggi il file HTML buildato
+    try:
+        with open(widget_html_path, "r", encoding="utf-8") as f:
+            html_content = f.read()
+        
+        # Sostituisci i path relativi con URL assoluti se necessario
+        # Vite di default usa path relativi, ma dobbiamo convertirli in assoluti
+        html_content = html_content.replace(
+            'src="/assets/',
+            f'src="{_BASE_URL}/assets/'
+        )
+        html_content = html_content.replace(
+            'href="/assets/',
+            f'href="{_BASE_URL}/assets/'
+        )
+        # Gestisci anche path senza slash iniziale
+        html_content = html_content.replace(
+            'src="assets/',
+            f'src="{_BASE_URL}/assets/'
+        )
+        html_content = html_content.replace(
+            'href="assets/',
+            f'href="{_BASE_URL}/assets/'
+        )
+        
+        return html_content
+    except Exception as e:
+        print(f"[widget] Error loading widget HTML: {e}")
+        # Fallback
+        return f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Search Widget</title>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="module" src="{_BASE_URL}/assets/index.js"></script>
+</body>
+</html>'''
+
+
 @widget(
     identifier="image-search-widget",
     title="Weaviate image search",
     template_uri="ui://widget/image-search.html",
     invoking="Apro il widget di ricerca immagini...",
     invoked="Widget immagini pronto.",
-    html=(
-        '<div id="root"></div>\n'
-        '<script type="module" src="https://weaviate-openai-app-sdk.onrender.com/assets/index.js"></script>'
-    ),
+    html=_load_widget_html(),  # Carica il HTML dal file buildato
     description=(
         "Widget per caricare un'immagine e fare image_search_vertex "
         "sulla collection Sinde nel cluster Weaviate."
     ),
 )
 def image_search_widget() -> dict:
-    # Puoi passare stato iniziale se ti serve, qui nulla
     return build_widget_tool_response(
         response_text="Ho aperto il widget di ricerca immagini.",
         structured_content={},
@@ -365,6 +426,65 @@ def image_search_widget() -> dict:
 @mcp.custom_route("/health", methods=["GET"])
 async def health(_request):
     return JSONResponse({"status": "ok", "service": "weaviate-mcp-http"})
+
+
+@mcp.custom_route("/assets/{file_path:path}", methods=["GET"])
+async def serve_assets(request):
+    """
+    Serve i file statici dell'app React buildata (JS, CSS, immagini, font, ecc.).
+    """
+    from starlette.responses import FileResponse
+    
+    file_path = request.path_params.get("file_path", "")
+    
+    # Prova prima nella cartella assets/
+    full_path = _WIDGET_DIST_DIR / "assets" / file_path
+    
+    # Se non esiste, prova nella root di dist
+    if not full_path.exists():
+        full_path = _WIDGET_DIST_DIR / file_path
+    
+    # Sicurezza: previeni directory traversal
+    try:
+        resolved_path = full_path.resolve()
+        dist_resolved = _WIDGET_DIST_DIR.resolve()
+        resolved_path.relative_to(dist_resolved)
+    except (ValueError, OSError):
+        return JSONResponse({"error": "Invalid path"}, status_code=400)
+    
+    if not full_path.exists() or not full_path.is_file():
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    
+    # Determina content-type basato sull'estensione
+    content_type_map = {
+        ".js": "application/javascript",
+        ".mjs": "application/javascript",
+        ".css": "text/css",
+        ".html": "text/html",
+        ".json": "application/json",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".svg": "image/svg+xml",
+        ".webp": "image/webp",
+        ".woff": "font/woff",
+        ".woff2": "font/woff2",
+        ".ttf": "font/ttf",
+        ".eot": "application/vnd.ms-fontobject",
+    }
+    
+    ext = full_path.suffix.lower()
+    content_type = content_type_map.get(ext, "application/octet-stream")
+    
+    return FileResponse(
+        full_path,
+        media_type=content_type,
+        headers={
+            "Cache-Control": "public, max-age=31536000",  # 1 anno per asset
+            "Access-Control-Allow-Origin": "*",  # CORS per widget
+        }
+    )
 
 
 @mcp.custom_route("/upload-image", methods=["POST"])

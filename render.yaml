@@ -12,3 +12,5 @@ services:
         sync: false
       - key: MCP_PATH
         value: /mcp/
+      - key: BASE_URL
+        value: https://weaviate-openai-app-sdk.onrender.com
