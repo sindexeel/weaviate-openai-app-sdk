@@ -789,6 +789,53 @@ async def upload_image_endpoint(request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@mcp.custom_route("/image-search", methods=["POST"])
+async def image_search_http(request):
+    """
+    Endpoint HTTP per effettuare la ricerca immagini usando image_search_vertex.
+    Si aspetta un JSON tipo:
+      {
+        "collection": "Sinde",
+        "image_id": "uuid from /upload-image",
+        "image_url": "... (opzionale)",
+        "caption": "... (opzionale)",
+        "limit": 10
+      }
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    collection = data.get("collection") or "Sinde"
+    image_id = data.get("image_id")
+    image_url = data.get("image_url")
+    caption = data.get("caption")
+    limit = data.get("limit") or 10
+
+    if not image_id and not image_url:
+        return JSONResponse(
+            {"error": "Either image_id or image_url must be provided"},
+            status_code=400,
+        )
+
+    try:
+        # Riusa la logica già esistente del tool MCP
+        result = image_search_vertex(
+            collection=collection,
+            image_id=image_id,
+            image_url=image_url,
+            caption=caption,
+            limit=limit,
+        )
+        return JSONResponse(result)
+    except Exception as e:
+        print(f"[image-search-http] error: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @mcp.tool()
 def get_instructions() -> Dict[str, Any]:
     return {

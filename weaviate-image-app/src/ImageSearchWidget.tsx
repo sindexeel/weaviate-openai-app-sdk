@@ -4,15 +4,6 @@ import React, { useState } from "react";
 // URL base del tuo server MCP (quello con serve.py)
 const MCP_BASE_URL = "https://weaviate-openai-app-sdk.onrender.com";
 
-declare global {
-  interface Window {
-    openai?: {
-      // API esposta da ChatGPT dentro il widget
-      callTool?: (toolName: string, args: Record<string, any>) => Promise<any>;
-    };
-  }
-}
-
 type SearchResult = {
   uuid?: string;
   properties?: {
@@ -72,40 +63,26 @@ export const ImageSearchWidget: React.FC = () => {
 
       setStatus(`Immagine caricata (image_id = ${imageId}). Avvio la ricerca...`);
 
-      // 2️⃣ Chiedi a ChatGPT di chiamare il tool MCP "image_search_vertex"
-      const openai = window.openai;
-
-      if (!openai?.callTool) {
-        // Siamo probabilmente in sviluppo locale, fuori da ChatGPT
-        setStatus(
-          "window.openai.callTool non disponibile (sei in dev locale?). Controlla la console."
-        );
-        console.warn(
-          "window.openai.callTool non esiste. Questa parte funzionerà solo dentro ChatGPT come widget."
-        );
-        return;
-      }
-
-      const toolResponse = await openai.callTool("image_search_vertex", {
-        collection: "Sinde", // come nel tuo serve.py
-        image_id: imageId,
-        limit: 5,
+      // 2️⃣ Chiama il backend HTTP /image-search (non più MCP)
+      const searchResp = await fetch(`${MCP_BASE_URL}/image-search`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          collection: "Sinde",
+          image_id: imageId,
+          limit: 10,
+        }),
       });
 
-      // La struttura precisa può variare; iniziamo gestendo i casi più semplici
-      let payload: any = toolResponse;
-
-      // Alcuni client mettono i dati in .structuredContent o .content
-      if (payload?.structuredContent) {
-        payload = payload.structuredContent;
-      } else if (payload?.content) {
-        payload = payload.content;
+      if (!searchResp.ok) {
+        const err = await searchResp.json().catch(() => ({}));
+        throw new Error(err.error || "Errore nella ricerca immagini");
       }
 
-      const r =
-        payload?.results ??
-        (Array.isArray(payload) ? payload : payload?.data?.results ?? []);
-
+      const searchJson = await searchResp.json();
+      
+      // searchJson.results contiene i tuoi oggetti Weaviate
+      const r = searchJson.results ?? [];
       setResults(Array.isArray(r) ? r : []);
       setStatus("Ricerca completata.");
     } catch (err: any) {
