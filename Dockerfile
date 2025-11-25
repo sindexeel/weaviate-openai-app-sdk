@@ -23,4 +23,6 @@ WORKDIR /app
 RUN pip install --no-cache-dir -r requirements.txt
 
 EXPOSE 10000
-CMD ["python", "serve.py"]
+# Usa uvicorn direttamente per avviare l'app
+# Render imposta PORT automaticamente, quindi usiamo uno script shell per leggerla
+CMD sh -c "uvicorn serve:app --host 0.0.0.0 --port ${PORT:-10000}"
