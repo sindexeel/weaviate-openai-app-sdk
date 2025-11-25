@@ -1442,6 +1442,25 @@ def diagnose_vertex() -> Dict[str, Any]:
     return info
 
 
+# Registry dei tool normali che vuoi esporre alla App
+TOOL_REGISTRY: Dict[str, Any] = {
+    "get_instructions": get_instructions,
+    "reload_instructions": reload_instructions,
+    "get_config": get_config,
+    "debug_widget": debug_widget,
+    "check_connection": check_connection,
+    "upload_image": upload_image,
+    "list_collections": list_collections,
+    "get_schema": get_schema,
+    "keyword_search": keyword_search,
+    "semantic_search": semantic_search,
+    "hybrid_search": hybrid_search,
+    "insert_image_vertex": insert_image_vertex,
+    "image_search_vertex": image_search_vertex,  # Nota: questa non ha @mcp.tool() ma è una funzione normale
+    "diagnose_vertex": diagnose_vertex,
+}
+
+
 # ==== Vertex OAuth Token Refresher (optional) ===============================
 def _write_adc_from_json_env():
     gac_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
@@ -1549,22 +1568,54 @@ TOOL_INPUT_SCHEMA: Dict[str, Any] = {
 
 @mcp._mcp_server.list_tools()
 async def _list_tools() -> List[types.Tool]:
-    """Espone il tool widget a ChatGPT (come in Pizzaz)."""
+    """Espone il tool widget + tutti i tool normali a ChatGPT."""
+    tools: List[types.Tool] = []
+
+    # 1) Tool del widget (quello con la UI)
     w = SINDE_WIDGET
-    return [
+    tools.append(
         types.Tool(
             name=w.identifier,
             title=w.title,
             description=w.title,
-            inputSchema=TOOL_INPUT_SCHEMA,
-            _meta=_tool_meta(w),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
+            _meta=_tool_meta(w),  # <<< QUI sta openai/outputTemplate ecc.
             annotations={
                 "destructiveHint": False,
                 "openWorldHint": False,
                 "readOnlyHint": True,
             },
         )
-    ]
+    )
+
+    # 2) Tutti gli altri tool normali
+    for name in TOOL_REGISTRY.keys():
+        tools.append(
+            types.Tool(
+                name=name,
+                title=name,
+                description=name,
+                inputSchema={
+                    "type": "object",
+                    "properties": {},  # niente schema dettagliato per ora
+                    "required": [],
+                    "additionalProperties": True,  # il modello può passare qualsiasi argomento
+                },
+                # niente _meta speciale -> tool "normale", senza widget
+                annotations={
+                    "destructiveHint": False,
+                    "openWorldHint": True,
+                    "readOnlyHint": False,
+                },
+            )
+        )
+
+    return tools
 
 
 @mcp._mcp_server.list_resources()
@@ -1620,37 +1671,93 @@ async def _handle_read_resource(req: types.ReadResourceRequest) -> types.ServerR
 
 
 async def _call_tool_request(req: types.CallToolRequest) -> types.ServerResult:
-    w = SINDE_WIDGET
-    if req.params.name != w.identifier:
+    name = req.params.name
+    args = req.params.arguments or {}
+
+    # 1) Tool del widget (UI)
+    if name == SINDE_WIDGET.identifier:
+        w = SINDE_WIDGET
+        meta = {
+            "openai/toolInvocation/invoking": w.invoking,
+            "openai/toolInvocation/invoked": w.invoked,
+        }
         return types.ServerResult(
             types.CallToolResult(
                 content=[
                     types.TextContent(
                         type="text",
-                        text=f"Unknown tool: {req.params.name}",
+                        text=w.response_text,
                     )
                 ],
-                isError=True,
+                structuredContent={"widgetReady": True},
+                _meta=meta,
             )
         )
 
-    meta = {
-        "openai/toolInvocation/invoking": w.invoking,
-        "openai/toolInvocation/invoked": w.invoked,
-    }
+    # 2) Tool normali (quelli del registry)
+    if name in TOOL_REGISTRY:
+        fn = TOOL_REGISTRY[name]
+        try:
+            # Proviamo a passare gli argomenti così come sono
+            result = fn(**args)
+            # Se la funzione è async, await
+            if hasattr(result, '__await__'):
+                result = await result
+        except TypeError as e:
+            # Se la firma non combacia (ad es. tool senza parametri), riproviamo senza args
+            try:
+                result = fn()
+                if hasattr(result, '__await__'):
+                    result = await result
+            except Exception as e2:
+                return types.ServerResult(
+                    types.CallToolResult(
+                        content=[
+                            types.TextContent(
+                                type="text",
+                                text=f"Errore chiamando tool {name}: {e2}",
+                            )
+                        ],
+                        isError=True,
+                    )
+                )
+        except Exception as e:
+            return types.ServerResult(
+                types.CallToolResult(
+                    content=[
+                        types.TextContent(
+                            type="text",
+                            text=f"Errore chiamando tool {name}: {e}",
+                        )
+                    ],
+                    isError=True,
+                )
+            )
 
-    # Qui potresti in futuro chiamare i tuoi tool ibridi / image_search,
-    # ma per far apparire il widget basta rispondere qualcosa.
+        # Il risultato vero lo mettiamo in structuredContent,
+        # così il modello lo vede in modo strutturato
+        return types.ServerResult(
+            types.CallToolResult(
+                content=[
+                    types.TextContent(
+                        type="text",
+                        text=f"Risultato del tool {name} disponibile in structuredContent.",
+                    )
+                ],
+                structuredContent=result if isinstance(result, dict) else {"result": result},
+            )
+        )
+
+    # 3) Tool sconosciuto
     return types.ServerResult(
         types.CallToolResult(
             content=[
                 types.TextContent(
                     type="text",
-                    text=w.response_text,
+                    text=f"Unknown tool: {name}",
                 )
             ],
-            structuredContent={"widgetReady": True},
-            _meta=meta,
+            isError=True,
         )
     )
 
