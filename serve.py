@@ -19,15 +19,36 @@ def _patch_uvicorn_for_render():
         # Salva la funzione originale
         original_run = uvicorn.run
         
-        def patched_run(app, host=None, port=None, **kwargs):
-            # Forza host e port per Render
+        def patched_run(*args, **kwargs):
+            # FORZA host e port per Render, intercettando qualsiasi chiamata
+            # Gestisce sia chiamate con argomenti posizionali che keyword
+            print(f"[mcp] patched uvicorn.run() intercepted")
+            print(f"[mcp] args: {args}, kwargs: {kwargs}")
+            
+            # Estrai app dal primo argomento posizionale
+            app = args[0] if args else kwargs.get("app")
+            
+            # FORZA host e port, ignorando qualsiasi valore passato
             kwargs["host"] = render_host
             kwargs["port"] = render_port
-            print(f"[mcp] patched uvicorn.run() with host={render_host}, port={render_port}")
-            return original_run(app, **kwargs)
+            
+            # Rimuovi host e port da args se erano passati come posizionali (args[1], args[2])
+            if len(args) > 1:
+                print(f"[mcp] original positional args: host={args[1] if len(args) > 1 else None}, port={args[2] if len(args) > 2 else None}")
+            
+            print(f"[mcp] FORCING host={render_host}, port={render_port}")
+            return original_run(app, host=render_host, port=render_port, **kwargs)
         
         # Applica il patch
         uvicorn.run = patched_run
+        
+        # Patch anche se FastMCP fa "from uvicorn import run"
+        try:
+            import uvicorn.main
+            uvicorn.main.run = patched_run
+        except:
+            pass
+        
         print(f"[mcp] uvicorn.run() patched early for Render (host={render_host}, port={render_port})")
     except ImportError:
         # uvicorn non è ancora disponibile, verrà patchato dopo
