@@ -1362,27 +1362,66 @@ if __name__ == "__main__":
     # Prova prima a usare uvicorn direttamente (più affidabile per Render)
     try:
         import uvicorn
-        # Prova vari modi per ottenere l'app Starlette
+        from starlette.applications import Starlette
+        
+        # Prova vari modi per ottenere l'app Starlette in modo più aggressivo
         app = None
+        
         # Metodo 1: attributi diretti
-        app = getattr(mcp, "app", None) or getattr(mcp, "_app", None)
+        for attr_name in ["app", "_app", "asgi_app", "_asgi_app"]:
+            app = getattr(mcp, attr_name, None)
+            if app and isinstance(app, Starlette):
+                print(f"[mcp] found app via mcp.{attr_name}")
+                break
+        
         # Metodo 2: tramite _server se disponibile
         if not app:
             server = getattr(mcp, "_server", None)
             if server:
-                app = getattr(server, "app", None) or getattr(server, "_app", None)
+                for attr_name in ["app", "_app", "asgi_app", "_asgi_app"]:
+                    app = getattr(server, attr_name, None)
+                    if app and isinstance(app, Starlette):
+                        print(f"[mcp] found app via mcp._server.{attr_name}")
+                        break
+        
         # Metodo 3: tramite _transport se disponibile
         if not app:
             transport = getattr(mcp, "_transport", None)
             if transport:
-                app = getattr(transport, "app", None) or getattr(transport, "_app", None)
+                for attr_name in ["app", "_app", "asgi_app", "_asgi_app"]:
+                    app = getattr(transport, attr_name, None)
+                    if app and isinstance(app, Starlette):
+                        print(f"[mcp] found app via mcp._transport.{attr_name}")
+                        break
+        
+        # Metodo 4: cerca in tutti gli attributi di mcp
+        if not app:
+            for attr_name in dir(mcp):
+                if not attr_name.startswith("__"):
+                    try:
+                        attr = getattr(mcp, attr_name)
+                        if isinstance(attr, Starlette):
+                            app = attr
+                            print(f"[mcp] found app via mcp.{attr_name}")
+                            break
+                    except:
+                        pass
         
         if app:
             print(f"[mcp] starting server with uvicorn on {host}:{port}")
             uvicorn.run(app, host=host, port=port, log_level="info")
         else:
-            # Se non troviamo l'app, usa mcp.run() con streamable-http
-            print("[mcp] FastMCP app not found, using mcp.run() with streamable-http")
+            # Se non troviamo l'app, monkey-patch uvicorn per forzare host/port
+            print("[mcp] FastMCP app not found, monkey-patching uvicorn.run()")
+            original_run = uvicorn.run
+            
+            def patched_run(app, **kwargs):
+                kwargs["host"] = host
+                kwargs["port"] = port
+                print(f"[mcp] patched uvicorn.run() with host={host}, port={port}")
+                return original_run(app, **kwargs)
+            
+            uvicorn.run = patched_run
             print(f"[mcp] configured FASTMCP_HOST={host}, FASTMCP_PORT={port}")
             mcp.run(transport="streamable-http")
     except ImportError:
