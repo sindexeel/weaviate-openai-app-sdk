@@ -6,6 +6,36 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# Monkey-patch uvicorn.run() PRIMA che FastMCP lo importi
+# Questo forza host=0.0.0.0 e port=PORT per Render
+def _patch_uvicorn_for_render():
+    """Patch uvicorn.run() per forzare host e port corretti su Render."""
+    try:
+        import uvicorn
+        # Leggi PORT dall'environment (Render la imposta automaticamente)
+        render_port = int(os.environ.get("PORT", "10000"))
+        render_host = "0.0.0.0"
+        
+        # Salva la funzione originale
+        original_run = uvicorn.run
+        
+        def patched_run(app, host=None, port=None, **kwargs):
+            # Forza host e port per Render
+            kwargs["host"] = render_host
+            kwargs["port"] = render_port
+            print(f"[mcp] patched uvicorn.run() with host={render_host}, port={render_port}")
+            return original_run(app, **kwargs)
+        
+        # Applica il patch
+        uvicorn.run = patched_run
+        print(f"[mcp] uvicorn.run() patched early for Render (host={render_host}, port={render_port})")
+    except ImportError:
+        # uvicorn non è ancora disponibile, verrà patchato dopo
+        pass
+
+# Applica il patch all'inizio
+_patch_uvicorn_for_render()
+
 from mcp.server.fastmcp import FastMCP
 from starlette.responses import JSONResponse
 
@@ -1411,17 +1441,10 @@ if __name__ == "__main__":
             print(f"[mcp] starting server with uvicorn on {host}:{port}")
             uvicorn.run(app, host=host, port=port, log_level="info")
         else:
-            # Se non troviamo l'app, monkey-patch uvicorn per forzare host/port
-            print("[mcp] FastMCP app not found, monkey-patching uvicorn.run()")
-            original_run = uvicorn.run
-            
-            def patched_run(app, **kwargs):
-                kwargs["host"] = host
-                kwargs["port"] = port
-                print(f"[mcp] patched uvicorn.run() with host={host}, port={port}")
-                return original_run(app, **kwargs)
-            
-            uvicorn.run = patched_run
+            # Se non troviamo l'app, usa mcp.run() con streamable-http
+            # Il patch di uvicorn.run() è già stato applicato all'inizio del file
+            print("[mcp] FastMCP app not found, using mcp.run() with streamable-http")
+            print(f"[mcp] uvicorn.run() already patched at module level")
             print(f"[mcp] configured FASTMCP_HOST={host}, FASTMCP_PORT={port}")
             mcp.run(transport="streamable-http")
     except ImportError:
