@@ -485,34 +485,28 @@ def open_image_search_widget() -> Dict[str, Any]:
     Il widget caricherà automaticamente l'immagine e chiamerà image_search_vertex tramite window.openai.callTool.
     """
     # Restituisce la risposta del widget
-    # build_widget_tool_response dovrebbe già gestire i metadata correttamente
     widget_response = image_search_widget()
     
     # Debug: stampa la struttura completa della risposta
     print(f"[widget] Full widget response structure: {json.dumps(widget_response, indent=2, default=str)}")
     
-    # build_widget_tool_response dovrebbe già includere i metadata necessari
-    # ma verifichiamo se sono presenti e nel formato corretto
+    # Per OpenAI Apps SDK, i metadata devono essere nella risposta in un formato specifico
+    # Potrebbero dover essere nella struttura principale, non in _meta
     if isinstance(widget_response, dict):
-        # I metadata potrebbero essere già nella risposta da build_widget_tool_response
-        # oppure potrebbero dover essere aggiunti in un formato specifico
+        # Aggiungi i metadata nella struttura principale della risposta
+        # OpenAI Apps SDK potrebbe cercare i metadata qui
+        widget_response["_meta"] = {
+            "openai/outputTemplate": "ui://widget/image-search.html",
+        }
         
-        # Verifica se ci sono già metadata
-        has_meta = "_meta" in widget_response
-        has_content = "content" in widget_response
-        has_structured = "structuredContent" in widget_response
+        # Aggiungi anche nella struttura content se necessario
+        # Alcune versioni potrebbero richiedere i metadata qui
+        if "content" in widget_response and isinstance(widget_response["content"], list):
+            # I metadata potrebbero dover essere aggiunti come parte del content
+            # Ma per ora li mettiamo in _meta che è lo standard
+            pass
         
-        print(f"[widget] Response structure - has _meta: {has_meta}, has content: {has_content}, has structuredContent: {has_structured}")
-        
-        # Se build_widget_tool_response non ha aggiunto i metadata, aggiungili
-        # Ma potrebbe essere che debbano essere nella struttura content, non in _meta
-        if not has_meta:
-            widget_response["_meta"] = {}
-        
-        # Aggiungi i metadata OpenAI necessari
-        widget_response["_meta"]["openai/outputTemplate"] = "ui://widget/image-search.html"
-        
-        print(f"[widget] Final metadata: {widget_response.get('_meta', {})}")
+        print(f"[widget] Final response with metadata: {json.dumps(widget_response, indent=2, default=str)}")
     
     return widget_response
 
