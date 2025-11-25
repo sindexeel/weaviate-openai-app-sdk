@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "weaviate-mcp-server"
+version = "0.1.0"
+description = "Weaviate MCP Server for ChatGPT"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.setuptools]
+packages = []
+
