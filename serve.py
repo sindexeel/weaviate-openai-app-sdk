@@ -7,15 +7,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult, TextContent, ResourceContents
 from starlette.responses import JSONResponse
 
 # --- Weaviate client imports (v4) ---
 import weaviate
 from weaviate.classes.init import Auth
 from weaviate.classes.query import MetadataQuery
-
-# Rimuoviamo fastmcp_apps_sdk e implementiamo manualmente seguendo la guida ufficiale
-
 
 # In-memory stato Vertex
 _VERTEX_HEADERS: Dict[str, str] = {}
@@ -28,16 +26,15 @@ _UPLOADED_IMAGES: Dict[str, Dict[str, Any]] = {}
 _BASE_DIR = Path(__file__).resolve().parent
 _DEFAULT_PROMPT_PATH = _BASE_DIR / "prompts" / "instructions.md"
 _DEFAULT_DESCRIPTION_PATH = _BASE_DIR / "prompts" / "description.txt"
+
+# Dov'è il build della tua app React (Vite dist)
 _WIDGET_DIST_DIR = _BASE_DIR / "weaviate-image-app" / "dist"
+
+# URL pubblico del server (serve anche gli asset del widget)
 _BASE_URL = os.environ.get("BASE_URL", "https://weaviate-openai-app-sdk.onrender.com")
 
 
 def _build_vertex_header_map(token: str) -> Dict[str, str]:
-    """
-    Costruisce l'insieme minimo di header necessari per Vertex.
-    Evitiamo alias multipli (X-Goog-Api-Key, X-Palm-Api-Key, ...), che possono
-    essere interpretati come API key tradizionali e provocare errori.
-    """
     headers: Dict[str, str] = {
         "X-Goog-Vertex-Api-Key": token,
     }
@@ -45,9 +42,8 @@ def _build_vertex_header_map(token: str) -> Dict[str, str]:
         headers["X-Goog-User-Project"] = _VERTEX_USER_PROJECT
     return headers
 
-# ---- GCP Project discovery from Service Account or ADC ----
+
 def _discover_gcp_project() -> Optional[str]:
-    # Priority: GOOGLE_APPLICATION_CREDENTIALS_JSON -> GOOGLE_APPLICATION_CREDENTIALS -> ADC default project
     gac_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
     if gac_json:
         try:
@@ -67,7 +63,10 @@ def _discover_gcp_project() -> Optional[str]:
             pass
     try:
         import google.auth
-        creds, proj = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+
+        creds, proj = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
         if proj:
             return proj
     except Exception:
@@ -90,13 +89,6 @@ def _get_weaviate_api_key() -> str:
 
 
 def _resolve_service_account_path() -> Optional[str]:
-    """
-    Determine and set GOOGLE_APPLICATION_CREDENTIALS if possible.
-    Priority:
-      1. Existing GOOGLE_APPLICATION_CREDENTIALS (if file exists)
-      2. Explicit VERTEX_SA_PATH environment variable
-      3. Default Render secret path /etc/secrets/weaviate-sa.json
-    """
     gac_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if gac_path and os.path.exists(gac_path):
         _load_vertex_user_project(gac_path)
@@ -128,7 +120,7 @@ def _load_vertex_user_project(path: str) -> None:
             try:
                 print(f"[vertex-oauth] detected service account project: {_VERTEX_USER_PROJECT}")
             except (ValueError, OSError):
-                pass  # Ignora errori di I/O su stdout
+                pass
         else:
             try:
                 print("[vertex-oauth] warning: project_id not found in service account JSON")
@@ -138,14 +130,10 @@ def _load_vertex_user_project(path: str) -> None:
         try:
             print(f"[vertex-oauth] unable to read project id from SA: {exc}")
         except (ValueError, OSError):
-            pass  # Ignora errori di I/O su stdout
+            pass
 
 
 def _sync_refresh_vertex_token() -> bool:
-    """
-    Ottiene un token Vertex immediato usando le credenziali di servizio.
-    Restituisce True se il token è stato aggiornato con successo.
-    """
     try:
         from google.oauth2 import service_account
         from google.auth.transport.requests import Request
@@ -180,10 +168,9 @@ def _sync_refresh_vertex_token() -> bool:
 def _connect():
     url = _get_weaviate_url()
     key = _get_weaviate_api_key()
-    _resolve_service_account_path()  # garantisce il caricamento del project id se disponibile
+    _resolve_service_account_path()
 
-    # ----- Costruisci headers (REST) -----
-    headers = {}
+    headers: Dict[str, str] = {}
     openai_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENAI_APIKEY")
     if openai_key:
         headers["X-OpenAI-Api-Key"] = openai_key
@@ -191,25 +178,25 @@ def _connect():
     vertex_key = os.environ.get("VERTEX_APIKEY")
     vertex_bearer = os.environ.get("VERTEX_BEARER_TOKEN")
 
-    # A) API key statica
-    # Token bearer for REST/grpc (può essere passato via env se già ottenuto esternamente)
     if vertex_bearer:
         headers.update(_build_vertex_header_map(vertex_bearer))
         print("[vertex-oauth] using bearer token from VERTEX_BEARER_TOKEN env")
 
     if vertex_key and not headers:
-        for k in ["X-Goog-Vertex-Api-Key", "X-Goog-Api-Key", "X-Palm-Api-Key", "X-Goog-Studio-Api-Key"]:
+        for k in [
+            "X-Goog-Vertex-Api-Key",
+            "X-Goog-Api-Key",
+            "X-Palm-Api-Key",
+            "X-Goog-Studio-Api-Key",
+        ]:
             headers[k] = vertex_key
         print("[vertex-oauth] using static Vertex API key from VERTEX_APIKEY")
 
-    # B) OAuth bearer dal refresher (se attivo): già include Authorization e X-Goog-Vertex-Api-Key
     if not headers and "_VERTEX_HEADERS" in globals() and _VERTEX_HEADERS:
         headers.update(_VERTEX_HEADERS)
     elif not headers:
-        # prova un refresh sincrono se possibile
         if _sync_refresh_vertex_token():
             headers.update(_VERTEX_HEADERS)
-            # assicurati che nessuna env residuale confonda l'autenticazione
             token = _VERTEX_HEADERS.get("X-Goog-Vertex-Api-Key")
             if token:
                 if os.environ.get("GOOGLE_APIKEY") == token:
@@ -219,51 +206,53 @@ def _connect():
         else:
             print("[vertex-oauth] unable to obtain Vertex token synchronously")
 
-    # ----- Crea client (headers per REST) -----
     vertex_token = headers.get("X-Goog-Vertex-Api-Key")
     if vertex_token:
         token_preview = vertex_token[:10]
         project_debug = headers.get("X-Goog-User-Project")
         if project_debug:
-            print(f"[vertex-oauth] using Vertex header token prefix: {token_preview}... project: {project_debug}")
+            print(
+                f"[vertex-oauth] using Vertex header token prefix: {token_preview}... project: {project_debug}"
+            )
         else:
-            print(f"[vertex-oauth] using Vertex header token prefix: {token_preview}... (no x-goog-user-project)")
+            print(
+                f"[vertex-oauth] using Vertex header token prefix: {token_preview}... (no x-goog-user-project)"
+            )
     elif headers:
         print("[vertex-oauth] custom headers configured (non-Vertex)")
     else:
         print("[vertex-oauth] WARNING: no Vertex headers available for connection")
+
     client = weaviate.connect_to_weaviate_cloud(
         cluster_url=url,
         auth_credentials=Auth.api_key(key),
         headers=headers or None,
     )
 
-    # ----- Inietta metadata gRPC (chiavi *minuscole*) -----
-    # gRPC richiede lower-case ASCII per i metadata header
-    grpc_meta = {}
+    grpc_meta: Dict[str, str] = {}
     for k, v in (headers or {}).items():
         kk = k.lower()
-        # Evita alias non necessari in gRPC: manteniamo solo x-goog-vertex-api-key e user-project
         if kk not in {"x-goog-vertex-api-key", "x-goog-user-project"}:
             continue
         grpc_meta[kk] = v
 
-    # Safety: assicurati che almeno una di queste chiavi sia presente in minuscolo
     if vertex_key:
-        for kk in ["x-goog-vertex-api-key", "x-goog-api-key", "x-palm-api-key", "x-goog-studio-api-key"]:
+        for kk in [
+            "x-goog-vertex-api-key",
+            "x-goog-api-key",
+            "x-palm-api-key",
+            "x-goog-studio-api-key",
+        ]:
             grpc_meta.setdefault(kk, vertex_key)
     else:
-        # se stai usando OAuth, assicurati che 'authorization' sia presente
         if "authorization" not in grpc_meta and "_VERTEX_HEADERS" in globals() and _VERTEX_HEADERS:
             auth = _VERTEX_HEADERS.get("Authorization") or _VERTEX_HEADERS.get("authorization")
             if auth:
                 grpc_meta["authorization"] = auth
-    
-    # 2) OpenAI per text2vec-openai in Weaviate
+
     if openai_key:
         grpc_meta["x-openai-api-key"] = openai_key
 
-    # Scrivi nei campi interni compatibili con le varie minor del client (forza assegnazione)
     try:
         conn = getattr(client, "_connection", None)
         if conn is not None:
@@ -276,7 +265,6 @@ def _connect():
                 setattr(conn, "_grpc_metadata", meta_list)
             except Exception:
                 pass
-            # Metodo helper (se presente nelle ultime versioni)
             if hasattr(conn, "set_grpc_metadata"):
                 try:
                     conn.set_grpc_metadata(meta_list)
@@ -290,13 +278,7 @@ def _connect():
     return client
 
 
-
-
 def _load_text_source(env_keys, file_path):
-    """
-    Legge un testo da una lista di variabili d'ambiente o da un file.
-    Priorità: file > prima variabile non vuota.
-    """
     if isinstance(env_keys, str):
         env_keys = [env_keys]
     path = Path(file_path) if file_path else None
@@ -314,36 +296,34 @@ def _load_text_source(env_keys, file_path):
 
 
 _MCP_SERVER_NAME = os.environ.get("MCP_SERVER_NAME", "weaviate-mcp-http")
-_MCP_INSTRUCTIONS_FILE = os.environ.get("MCP_PROMPT_FILE") or os.environ.get("MCP_INSTRUCTIONS_FILE")
+_MCP_INSTRUCTIONS_FILE = os.environ.get("MCP_PROMPT_FILE") or os.environ.get(
+    "MCP_INSTRUCTIONS_FILE"
+)
 if not _MCP_INSTRUCTIONS_FILE and _DEFAULT_PROMPT_PATH.exists():
     _MCP_INSTRUCTIONS_FILE = str(_DEFAULT_PROMPT_PATH)
 _MCP_DESCRIPTION_FILE = os.environ.get("MCP_DESCRIPTION_FILE")
 if not _MCP_DESCRIPTION_FILE and _DEFAULT_DESCRIPTION_PATH.exists():
     _MCP_DESCRIPTION_FILE = str(_DEFAULT_DESCRIPTION_PATH)
 
-_MCP_INSTRUCTIONS = _load_text_source(["MCP_PROMPT", "MCP_INSTRUCTIONS"], _MCP_INSTRUCTIONS_FILE)
+_MCP_INSTRUCTIONS = _load_text_source(
+    ["MCP_PROMPT", "MCP_INSTRUCTIONS"], _MCP_INSTRUCTIONS_FILE
+)
 _MCP_DESCRIPTION = _load_text_source("MCP_DESCRIPTION", _MCP_DESCRIPTION_FILE)
 
 mcp = FastMCP(_MCP_SERVER_NAME)
 
-# I widget decorati verranno registrati dopo che sono stati definiti
 
 def _apply_mcp_metadata():
-    """Applica metadata al server MCP se supportato."""
     try:
-        # mcp.server.fastmcp potrebbe avere un metodo diverso per impostare metadata
-        # Prova a usare set_server_info se disponibile
-        if hasattr(mcp, 'set_server_info'):
-            server_info = {}
+        if hasattr(mcp, "set_server_info"):
+            server_info: Dict[str, Any] = {}
             if _MCP_DESCRIPTION:
                 server_info["description"] = _MCP_DESCRIPTION
             if _MCP_INSTRUCTIONS:
                 server_info["instructions"] = _MCP_INSTRUCTIONS
             if server_info:
                 mcp.set_server_info(**server_info)
-        # Altrimenti ignora - i metadata non sono critici
-    except Exception as _info_err:
-        # Ignora silenziosamente - i metadata non sono critici per il funzionamento
+    except Exception:
         pass
 
 
@@ -351,12 +331,10 @@ _apply_mcp_metadata()
 
 
 def _load_widget_html() -> str:
-    """Carica il widget HTML buildato dall'app React."""
     widget_html_path = _WIDGET_DIST_DIR / "index.html"
-    
+
     if not widget_html_path.exists():
-        # Fallback a HTML minimo se il build non esiste
-        return f'''<!DOCTYPE html>
+        return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="utf-8">
@@ -367,38 +345,29 @@ def _load_widget_html() -> str:
     <div id="root"></div>
     <script type="module" src="{_BASE_URL}/assets/index.js"></script>
 </body>
-</html>'''
-    
-    # Leggi il file HTML buildato
+</html>"""
+
     try:
         with open(widget_html_path, "r", encoding="utf-8") as f:
             html_content = f.read()
-        
-        # Sostituisci i path relativi con URL assoluti se necessario
-        # Vite di default usa path relativi, ma dobbiamo convertirli in assoluti
+
         html_content = html_content.replace(
-            'src="/assets/',
-            f'src="{_BASE_URL}/assets/'
+            'src="/assets/', f'src="{_BASE_URL}/assets/'
         )
         html_content = html_content.replace(
-            'href="/assets/',
-            f'href="{_BASE_URL}/assets/'
-        )
-        # Gestisci anche path senza slash iniziale
-        html_content = html_content.replace(
-            'src="assets/',
-            f'src="{_BASE_URL}/assets/'
+            'href="/assets/', f'href="{_BASE_URL}/assets/'
         )
         html_content = html_content.replace(
-            'href="assets/',
-            f'href="{_BASE_URL}/assets/'
+            'src="assets/', f'src="{_BASE_URL}/assets/'
         )
-        
+        html_content = html_content.replace(
+            'href="assets/', f'href="{_BASE_URL}/assets/'
+        )
+
         return html_content
     except Exception as e:
         print(f"[widget] Error loading widget HTML: {e}")
-        # Fallback
-        return f'''<!DOCTYPE html>
+        return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="utf-8">
@@ -409,24 +378,26 @@ def _load_widget_html() -> str:
     <div id="root"></div>
     <script type="module" src="{_BASE_URL}/assets/index.js"></script>
 </body>
-</html>'''
+</html>"""
 
 
-# Step 1 - Register a component template (come nella guida ufficiale)
-# Registra la risorsa widget con mimeType text/html+skybridge e metadata
-# mcp.server.fastmcp supporta @mcp.resource() per registrare risorse
+# === WIDGET RESOURCE ===
+
 widget_uri = "ui://widget/image-search.html"
 
-@mcp.resource(uri=widget_uri, name="image-search-widget", description="Widget per la ricerca di immagini in Weaviate")
-def image_search_widget_resource():
-    """Risorsa widget registrata seguendo la guida ufficiale OpenAI Apps SDK."""
+
+@mcp.resource(widget_uri, name="image-search-widget", description="Widget per la ricerca di immagini in Weaviate")
+def image_search_widget_resource() -> List[ResourceContents]:
+    """
+    Risorsa widget HTML per ChatGPT Apps.
+    """
     widget_html = _load_widget_html()
-    return {
-        "contents": [{
-            "uri": widget_uri,
-            "mimeType": "text/html+skybridge",
-            "text": widget_html,
-            "_meta": {
+    return [
+        ResourceContents(
+            uri=widget_uri,
+            mimeType="text/html+skybridge",
+            text=widget_html,
+            _meta={
                 "openai/widgetPrefersBorder": True,
                 "openai/widgetDomain": "https://chatgpt.com",
                 "openai/widgetCSP": {
@@ -434,97 +405,44 @@ def image_search_widget_resource():
                     "resource_domains": ["https://*.oaistatic.com"],
                 },
             },
-        }],
-    }
+        )
+    ]
 
 
-# Step 2 - Describe tools (come nella guida ufficiale)
-# Il tool deve avere _meta["openai/outputTemplate"] nella definizione
-# mcp.server.fastmcp non supporta _meta come parametro, lo aggiungiamo dopo
-@mcp.tool()
-def open_image_search_widget() -> Dict[str, Any]:
+# === WIDGET TOOL ===
+
+@mcp.tool(
+    name="open_image_search_widget",
+    description="Apri il widget grafico per fare ricerca immagini sulla collection Sinde.",
+    meta={
+        "openai/outputTemplate": widget_uri,
+        "openai/toolInvocation/invoking": "Sto preparando il widget di ricerca immagini…",
+        "openai/toolInvocation/invoked": "Widget di ricerca immagini pronto.",
+    },
+)
+def open_image_search_widget() -> CallToolResult:
     """
     Apre il widget interattivo per la ricerca di immagini.
-    
-    Usa questo tool per aprire un'interfaccia grafica dove puoi:
-    - Caricare un'immagine dal tuo dispositivo
-    - Cercare immagini simili nella collection Sinde usando image_search_vertex
-    - Visualizzare i risultati in modo interattivo
-    
-    Il widget si aprirà nell'interfaccia di ChatGPT e potrai usarlo direttamente.
     """
-    # Step 3 - Return structured data and metadata
-    # La risposta deve includere structuredContent, content, e _meta
-    return {
-        "structuredContent": {
+    return CallToolResult(
+        structuredContent={
             "widgetReady": True,
             "message": "Widget di ricerca immagini pronto all'uso.",
         },
-        "content": [
-            {
-                "type": "text",
-                "text": "Ho aperto il widget di ricerca immagini. Puoi caricare un'immagine e cercare immagini simili nella collection Sinde.",
-            }
+        content=[
+            TextContent(
+                type="text",
+                text=(
+                    "Ho aperto il widget di ricerca immagini. "
+                    "Puoi caricare un'immagine e cercare immagini simili nella collection Sinde."
+                ),
+            )
         ],
-        "_meta": {
-            # Metadata per il widget (non visibile al modello)
+        _meta={
             "baseUrl": _BASE_URL,
         },
-    }
+    )
 
-# Aggiungi i metadata alla definizione del tool dopo la registrazione
-# mcp.server.fastmcp richiede che i metadata siano aggiunti dopo la registrazione
-def _add_tool_metadata():
-    """Aggiunge metadata openai/outputTemplate alla definizione del tool."""
-    try:
-        # mcp.server.fastmcp potrebbe memorizzare i tool in modo diverso
-        # Prova ad accedere ai tool registrati
-        if hasattr(mcp, '_tools'):
-            tools = mcp._tools
-        elif hasattr(mcp, 'tools'):
-            tools = mcp.tools
-        else:
-            # Prova ad accedere tramite l'app Starlette
-            app = getattr(mcp, 'app', None) or getattr(mcp, '_app', None)
-            if app and hasattr(app, 'state') and hasattr(app.state, 'tools'):
-                tools = app.state.tools
-            else:
-                return
-        
-        # Aggiungi i metadata al tool
-        tool_name = 'open_image_search_widget'
-        if isinstance(tools, dict) and tool_name in tools:
-            tool_def = tools[tool_name]
-            # Aggiungi _meta se non esiste
-            if not hasattr(tool_def, '_meta'):
-                tool_def._meta = {}
-            elif not isinstance(tool_def._meta, dict):
-                tool_def._meta = {}
-            
-            tool_def._meta.update({
-                "openai/outputTemplate": widget_uri,
-                "openai/toolInvocation/invoking": "Aprendo il widget di ricerca immagini...",
-                "openai/toolInvocation/invoked": "Widget di ricerca immagini pronto.",
-            })
-        elif isinstance(tools, list):
-            # Se tools è una lista, cerca il tool per nome
-            for tool_def in tools:
-                if hasattr(tool_def, 'name') and tool_def.name == tool_name:
-                    if not hasattr(tool_def, '_meta'):
-                        tool_def._meta = {}
-                    tool_def._meta.update({
-                        "openai/outputTemplate": widget_uri,
-                        "openai/toolInvocation/invoking": "Aprendo il widget di ricerca immagini...",
-                        "openai/toolInvocation/invoked": "Widget di ricerca immagini pronto.",
-                    })
-                    break
-    except Exception as e:
-        # Se non riusciamo ad aggiungere i metadata, il tool funzionerà comunque
-        # ma il widget potrebbe non apparire
-        print(f"[widget] Warning: Could not add metadata to tool: {e}")
-
-# Chiama dopo che il tool è stato registrato
-_add_tool_metadata()
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health(_request):
@@ -533,32 +451,24 @@ async def health(_request):
 
 @mcp.custom_route("/assets/{file_path:path}", methods=["GET"])
 async def serve_assets(request):
-    """
-    Serve i file statici dell'app React buildata (JS, CSS, immagini, font, ecc.).
-    """
     from starlette.responses import FileResponse
-    
+
     file_path = request.path_params.get("file_path", "")
-    
-    # Prova prima nella cartella assets/
+
     full_path = _WIDGET_DIST_DIR / "assets" / file_path
-    
-    # Se non esiste, prova nella root di dist
     if not full_path.exists():
         full_path = _WIDGET_DIST_DIR / file_path
-    
-    # Sicurezza: previeni directory traversal
+
     try:
         resolved_path = full_path.resolve()
         dist_resolved = _WIDGET_DIST_DIR.resolve()
         resolved_path.relative_to(dist_resolved)
     except (ValueError, OSError):
         return JSONResponse({"error": "Invalid path"}, status_code=400)
-    
+
     if not full_path.exists() or not full_path.is_file():
         return JSONResponse({"error": "Not found"}, status_code=404)
-    
-    # Determina content-type basato sull'estensione
+
     content_type_map = {
         ".js": "application/javascript",
         ".mjs": "application/javascript",
@@ -576,78 +486,84 @@ async def serve_assets(request):
         ".ttf": "font/ttf",
         ".eot": "application/vnd.ms-fontobject",
     }
-    
+
     ext = full_path.suffix.lower()
     content_type = content_type_map.get(ext, "application/octet-stream")
-    
+
     return FileResponse(
         full_path,
         media_type=content_type,
         headers={
-            "Cache-Control": "public, max-age=31536000",  # 1 anno per asset
-            "Access-Control-Allow-Origin": "*",  # CORS per widget
-        }
+            "Cache-Control": "public, max-age=31536000",
+            "Access-Control-Allow-Origin": "*",
+        },
     )
 
 
 @mcp.custom_route("/upload-image", methods=["POST"])
 async def upload_image_endpoint(request):
-    """
-    Endpoint HTTP per upload diretto di immagini.
-    Accetta multipart/form-data con campo 'image' o JSON con 'image_b64'.
-    Restituisce image_id da usare in hybrid_search o image_search_vertex.
-    """
     try:
         content_type = request.headers.get("content-type", "")
         image_b64 = None
-        
+
         if "multipart/form-data" in content_type:
-            # Upload multipart (file diretto)
             form = await request.form()
             if "image" not in form:
-                return JSONResponse({"error": "Missing 'image' field in form data"}, status_code=400)
-            
+                return JSONResponse(
+                    {"error": "Missing 'image' field in form data"}, status_code=400
+                )
+
             file = form["image"]
             if hasattr(file, "read"):
-                # File upload
                 import base64
+
                 file_bytes = await file.read()
-                image_b64 = base64.b64encode(file_bytes).decode('utf-8')
+                image_b64 = base64.b64encode(file_bytes).decode("utf-8")
             else:
-                return JSONResponse({"error": "Invalid file upload"}, status_code=400)
+                return JSONResponse(
+                    {"error": "Invalid file upload"}, status_code=400
+                )
         else:
-            # JSON con base64
             try:
                 data = await request.json()
                 image_b64 = data.get("image_b64")
                 if not image_b64:
-                    return JSONResponse({"error": "Missing 'image_b64' in JSON body"}, status_code=400)
+                    return JSONResponse(
+                        {"error": "Missing 'image_b64' in JSON body"}, status_code=400
+                    )
             except Exception:
-                return JSONResponse({"error": "Invalid request format. Use multipart/form-data with 'image' field or JSON with 'image_b64'"}, status_code=400)
-        
+                return JSONResponse(
+                    {
+                        "error": "Invalid request format. Use multipart/form-data with 'image' field or JSON with 'image_b64'"
+                    },
+                    status_code=400,
+                )
+
         if not image_b64:
             return JSONResponse({"error": "No image data provided"}, status_code=400)
-        
-        # Pulisci e valida il base64
+
         cleaned_b64 = _clean_base64(image_b64)
         if not cleaned_b64:
-            return JSONResponse({"error": "Invalid base64 image string"}, status_code=400)
-        
-        # Genera un ID univoco
+            return JSONResponse(
+                {"error": "Invalid base64 image string"}, status_code=400
+            )
+
         image_id = str(uuid.uuid4())
-        
-        # Salva l'immagine con timestamp di scadenza (1 ora)
+
         _UPLOADED_IMAGES[image_id] = {
             "image_b64": cleaned_b64,
-            "expires_at": time.time() + 3600,  # 1 ora
+            "expires_at": time.time() + 3600,
         }
-        
-        # Pulisci immagini scadute
+
         current_time = time.time()
-        expired_ids = [img_id for img_id, data in _UPLOADED_IMAGES.items() if data["expires_at"] < current_time]
+        expired_ids = [
+            img_id
+            for img_id, data in _UPLOADED_IMAGES.items()
+            if data["expires_at"] < current_time
+        ]
         for img_id in expired_ids:
             _UPLOADED_IMAGES.pop(img_id, None)
-        
+
         return JSONResponse({"image_id": image_id, "expires_in": 3600})
     except Exception as e:
         print(f"[upload-image] error: {e}")
@@ -656,9 +572,6 @@ async def upload_image_endpoint(request):
 
 @mcp.tool()
 def get_instructions() -> Dict[str, Any]:
-    """
-    Restituisce le istruzioni/prompt configurati per questo server MCP.
-    """
     return {
         "instructions": _MCP_INSTRUCTIONS,
         "description": _MCP_DESCRIPTION,
@@ -670,18 +583,21 @@ def get_instructions() -> Dict[str, Any]:
 
 @mcp.tool()
 def reload_instructions() -> Dict[str, Any]:
-    """
-    Ricarica descrizione/prompt da variabili d'ambiente o file associati.
-    """
     global _MCP_INSTRUCTIONS, _MCP_DESCRIPTION, _MCP_INSTRUCTIONS_FILE, _MCP_DESCRIPTION_FILE
-    _MCP_INSTRUCTIONS_FILE = os.environ.get("MCP_PROMPT_FILE") or os.environ.get("MCP_INSTRUCTIONS_FILE")
+    _MCP_INSTRUCTIONS_FILE = os.environ.get("MCP_PROMPT_FILE") or os.environ.get(
+        "MCP_INSTRUCTIONS_FILE"
+    )
     if not _MCP_INSTRUCTIONS_FILE and _DEFAULT_PROMPT_PATH.exists():
         _MCP_INSTRUCTIONS_FILE = str(_DEFAULT_PROMPT_PATH)
     _MCP_DESCRIPTION_FILE = os.environ.get("MCP_DESCRIPTION_FILE")
     if not _MCP_DESCRIPTION_FILE and _DEFAULT_DESCRIPTION_PATH.exists():
         _MCP_DESCRIPTION_FILE = str(_DEFAULT_DESCRIPTION_PATH)
-    _MCP_INSTRUCTIONS = _load_text_source(["MCP_PROMPT", "MCP_INSTRUCTIONS"], _MCP_INSTRUCTIONS_FILE)
-    _MCP_DESCRIPTION = _load_text_source("MCP_DESCRIPTION", _MCP_DESCRIPTION_FILE)
+    _MCP_INSTRUCTIONS = _load_text_source(
+        ["MCP_PROMPT", "MCP_INSTRUCTIONS"], _MCP_INSTRUCTIONS_FILE
+    )
+    _MCP_DESCRIPTION = _load_text_source(
+        "MCP_DESCRIPTION", _MCP_DESCRIPTION_FILE
+    )
     _apply_mcp_metadata()
     return get_instructions()
 
@@ -689,31 +605,30 @@ def reload_instructions() -> Dict[str, Any]:
 @mcp.tool()
 def get_config() -> Dict[str, Any]:
     return {
-        "weaviate_url": os.environ.get("WEAVIATE_CLUSTER_URL") or os.environ.get("WEAVIATE_URL"),
+        "weaviate_url": os.environ.get("WEAVIATE_CLUSTER_URL")
+        or os.environ.get("WEAVIATE_URL"),
         "weaviate_api_key_set": bool(os.environ.get("WEAVIATE_API_KEY")),
-        "openai_api_key_set": bool(os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENAI_APIKEY")),
+        "openai_api_key_set": bool(
+            os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENAI_APIKEY")
+        ),
         "cohere_api_key_set": bool(os.environ.get("COHERE_API_KEY")),
     }
 
 
 @mcp.tool()
 def debug_widget() -> Dict[str, Any]:
-    """
-    Tool di debug per verificare lo stato del widget.
-    """
     widget_html_path = _WIDGET_DIST_DIR / "index.html"
     widget_exists = widget_html_path.exists()
-    
-    # Verifica se ci sono asset nella cartella dist
+
     assets_dir = _WIDGET_DIST_DIR / "assets"
-    assets_exist = assets_dir.exists() if assets_dir else False
-    
+    assets_exist = assets_dir.exists()
+
     return {
         "widget_html_exists": widget_exists,
         "widget_html_path": str(widget_html_path),
         "assets_dir_exists": assets_exist,
         "base_url": _BASE_URL,
-        "widget_template_uri": "ui://widget/image-search.html",
+        "widget_template_uri": widget_uri,
         "widget_identifier": "image-search-widget",
     }
 
@@ -730,66 +645,52 @@ def check_connection() -> Dict[str, Any]:
 
 @mcp.tool()
 def upload_image(image_url: Optional[str] = None, image_path: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Carica un'immagine da URL o file path locale e restituisce un ID temporaneo da usare in hybrid_search o image_search_vertex.
-    
-    IMPORTANTE: 
-    - Se hai un URL dell'immagine, passa image_url - il server scaricherà e convertirà automaticamente in base64.
-    - Se hai un file path locale sul server, passa image_path - il server leggerà il file e lo convertirà in base64.
-    
-    L'immagine viene validata e pulita automaticamente. L'ID restituito è valido per 1 ora.
-    La conversione in base64 viene gestita automaticamente dal server - non devi convertire manualmente.
-    
-    Esempi:
-    - upload_image(image_url="https://example.com/image.jpg") -> {"image_id": "uuid-here"}
-    - upload_image(image_path="/path/to/image.jpg") -> {"image_id": "uuid-here"}
-    
-    NOTA: Se hai un file sul client (non sul server), usa l'endpoint HTTP POST /upload-image con multipart/form-data.
-    """
     global _UPLOADED_IMAGES
-    
+
     cleaned_b64 = None
-    
+
     if image_path:
-        # Carica l'immagine da file path locale e converte in base64
         print(f"[upload_image] Loading image from path: {image_path}")
         try:
             import os
+            import base64
+
             if not os.path.exists(image_path):
                 return {"error": f"File not found: {image_path}"}
             with open(image_path, "rb") as f:
-                import base64
                 file_bytes = f.read()
-                image_b64_raw = base64.b64encode(file_bytes).decode('utf-8')
+                image_b64_raw = base64.b64encode(file_bytes).decode("utf-8")
                 cleaned_b64 = _clean_base64(image_b64_raw)
         except Exception as e:
-            return {"error": f"Failed to load image from path {image_path}: {str(e)}"}
+            return {
+                "error": f"Failed to load image from path {image_path}: {str(e)}"
+            }
         if not cleaned_b64:
             return {"error": f"Invalid image file: {image_path}"}
     elif image_url:
-        # Carica l'immagine dall'URL e converte in base64
         print(f"[upload_image] Loading image from URL: {image_url}")
         cleaned_b64 = _load_image_from_url(image_url)
         if not cleaned_b64:
             return {"error": f"Failed to load image from URL: {image_url}"}
     else:
         return {"error": "Either image_url or image_path must be provided"}
-    
-    # Genera un ID univoco
+
     image_id = str(uuid.uuid4())
-    
-    # Salva l'immagine con timestamp di scadenza (1 ora)
+
     _UPLOADED_IMAGES[image_id] = {
         "image_b64": cleaned_b64,
-        "expires_at": time.time() + 3600,  # 1 ora
+        "expires_at": time.time() + 3600,
     }
-    
-    # Pulisci immagini scadute
+
     current_time = time.time()
-    expired_ids = [img_id for img_id, data in _UPLOADED_IMAGES.items() if data["expires_at"] < current_time]
+    expired_ids = [
+        img_id
+        for img_id, data in _UPLOADED_IMAGES.items()
+        if data["expires_at"] < current_time
+    ]
     for img_id in expired_ids:
         _UPLOADED_IMAGES.pop(img_id, None)
-    
+
     return {"image_id": image_id, "expires_in": 3600}
 
 
@@ -847,7 +748,9 @@ def keyword_search(collection: str, query: str, limit: int = 10) -> Dict[str, An
                 {
                     "uuid": str(getattr(o, "uuid", "")),
                     "properties": getattr(o, "properties", {}),
-                    "bm25_score": getattr(getattr(o, "metadata", None), "score", None),
+                    "bm25_score": getattr(
+                        getattr(o, "metadata", None), "score", None
+                    ),
                 }
             )
         return {"count": len(out), "results": out}
@@ -873,7 +776,9 @@ def semantic_search(collection: str, query: str, limit: int = 10) -> Dict[str, A
                 {
                     "uuid": str(getattr(o, "uuid", "")),
                     "properties": getattr(o, "properties", {}),
-                    "distance": getattr(getattr(o, "metadata", None), "distance", None),
+                    "distance": getattr(
+                        getattr(o, "metadata", None), "distance", None
+                    ),
                 }
             )
         return {"count": len(out), "results": out}
@@ -887,32 +792,24 @@ def hybrid_search(
     query: str,
     limit: int = 10,
     alpha: float = 0.8,
-    query_properties: Optional[Any] = None,  # Accetta sia lista che stringa JSON
+    query_properties: Optional[Any] = None,
     image_id: Optional[str] = None,
     image_url: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Hybrid search che supporta sia testo che immagini.
-    Se viene fornita image_id (da upload_image) o image_url, genera l'embedding e lo usa per la parte vettoriale.
-    La conversione in base64 viene gestita automaticamente dal server.
-    Preferisci image_id (più efficiente) > image_url.
-    """
-    # Forza l'uso della collection "Sinde" (come specificato nel prompt)
     if collection and collection != "Sinde":
-        print(f"[hybrid_search] warning: collection '{collection}' requested, but using 'Sinde' as per instructions")
+        print(
+            f"[hybrid_search] warning: collection '{collection}' requested, but using 'Sinde' as per instructions"
+        )
         collection = "Sinde"
-    
-    # Gestisci query_properties se arriva come stringa JSON invece di lista
+
     if query_properties and isinstance(query_properties, str):
         try:
             query_properties = json.loads(query_properties)
         except (json.JSONDecodeError, TypeError):
-            pass  # Se non è JSON valido, ignora
-    
-    # Variabile interna per base64 (non esposta nello schema MCP)
+            pass
+
     image_b64 = None
-    
-    # Recupera immagine da image_id se fornito (metodo preferito)
+
     if image_id:
         if image_id in _UPLOADED_IMAGES:
             img_data = _UPLOADED_IMAGES[image_id]
@@ -920,53 +817,65 @@ def hybrid_search(
                 image_b64 = img_data["image_b64"]
             else:
                 _UPLOADED_IMAGES.pop(image_id, None)
-                return {"error": f"Image ID {image_id} has expired. Please upload the image again."}
+                return {
+                    "error": f"Image ID {image_id} has expired. Please upload the image again."
+                }
         else:
-            return {"error": f"Image ID {image_id} not found. Please upload the image first using upload_image."}
-    
-    # Carica immagine da URL se fornita e converte in base64 internamente
+            return {
+                "error": f"Image ID {image_id} not found. Please upload the image first using upload_image."
+            }
+
     if image_url and not image_b64:
         image_b64 = _load_image_from_url(image_url)
         if not image_b64:
             return {"error": f"Failed to load image from URL: {image_url}"}
-        # Pulisci e valida il base64 caricato da URL
         image_b64 = _clean_base64(image_b64)
         if not image_b64:
             return {"error": f"Invalid image format from URL: {image_url}"}
-    
+
     client = _connect()
     try:
         coll = client.collections.get(collection)
         if coll is None:
             return {"error": f"Collection '{collection}' not found"}
-        # Se c'è un'immagine, genera l'embedding e passa il vettore a hybrid()
-        # hybrid() accetta 'vector' (array di embedding), non 'near_image' o 'near_vector'
+
         if image_b64:
-            # Genera l'embedding dell'immagine (e opzionalmente del testo)
-            vec = _vertex_embed(image_b64=image_b64, text=query if query else None)
+            vec = _vertex_embed(
+                image_b64=image_b64, text=query if query else None
+            )
             hybrid_params = {
                 "query": query if query else "",
                 "alpha": alpha,
                 "limit": limit,
-                "vector": vec,  # Passa il vettore di embedding direttamente
-                "return_properties": ["name", "source_pdf", "page_index", "mediaType"],
+                "vector": vec,
+                "return_properties": [
+                    "name",
+                    "source_pdf",
+                    "page_index",
+                    "mediaType",
+                ],
                 "return_metadata": MetadataQuery(score=True, distance=True),
             }
             if query_properties:
                 hybrid_params["query_properties"] = query_properties
             resp = coll.query.hybrid(**hybrid_params)
         else:
-            # Solo testo, nessuna immagine
             hybrid_params = {
                 "query": query,
                 "alpha": alpha,
                 "limit": limit,
-                "return_properties": ["name", "source_pdf", "page_index", "mediaType"],
+                "return_properties": [
+                    "name",
+                    "source_pdf",
+                    "page_index",
+                    "mediaType",
+                ],
                 "return_metadata": MetadataQuery(score=True, distance=True),
             }
             if query_properties:
                 hybrid_params["query_properties"] = query_properties
             resp = coll.query.hybrid(**hybrid_params)
+
         out = []
         for o in getattr(resp, "objects", []) or []:
             md = getattr(o, "metadata", None)
@@ -985,12 +894,14 @@ def hybrid_search(
         client.close()
 
 
-# ---- Optional: Vertex AI Multimodal Embeddings (client-side) ----
+# ---- Optional: Vertex AI Multimodal Embeddings ----
 try:
     from google.cloud import aiplatform
+
     _VERTEX_AVAILABLE = True
 except Exception:
     _VERTEX_AVAILABLE = False
+
 
 def _ensure_gcp_adc():
     gac_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
@@ -1004,41 +915,40 @@ def _ensure_gcp_adc():
     if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
         _load_vertex_user_project(os.environ["GOOGLE_APPLICATION_CREDENTIALS"])
 
+
 def _load_image_from_url(image_url: str) -> Optional[str]:
-    """
-    Carica un'immagine da URL pubblico e la converte in base64.
-    Valida che sia un formato immagine supportato.
-    """
     try:
         import requests
         import base64
+
         response = requests.get(image_url, timeout=30, stream=True)
         response.raise_for_status()
-        
-        # Verifica content-type
-        content_type = response.headers.get('content-type', '').lower()
-        if not content_type.startswith('image/'):
-            print(f"[image] warning: URL {image_url} does not return an image (content-type: {content_type})")
-            # Non fallire subito, potrebbe essere un'immagine comunque
-        
-        # Limita la dimensione a 10MB per evitare problemi
+
+        content_type = response.headers.get("content-type", "").lower()
+        if not content_type.startswith("image/"):
+            print(
+                f"[image] warning: URL {image_url} does not return an image (content-type: {content_type})"
+            )
+
         content = response.content
         if len(content) > 10 * 1024 * 1024:
-            print(f"[image] warning: image from {image_url} is too large ({len(content)} bytes)")
+            print(
+                f"[image] warning: image from {image_url} is too large ({len(content)} bytes)"
+            )
             return None
-        
-        # Verifica dimensione minima
+
         if len(content) < 100:
-            print(f"[image] warning: image from {image_url} is too small ({len(content)} bytes)")
+            print(
+                f"[image] warning: image from {image_url} is too small ({len(content)} bytes)"
+            )
             return None
-        
-        # Verifica che sia un formato immagine valido (controlla magic bytes)
+
         valid_formats = {
-            b'\xff\xd8\xff': 'JPEG',
-            b'\x89PNG\r\n\x1a\n': 'PNG',
-            b'GIF87a': 'GIF',
-            b'GIF89a': 'GIF',
-            b'RIFF': 'WEBP',  # WEBP inizia con RIFF
+            b"\xff\xd8\xff": "JPEG",
+            b"\x89PNG\r\n\x1a\n": "PNG",
+            b"GIF87a": "GIF",
+            b"GIF89a": "GIF",
+            b"RIFF": "WEBP",
         }
         is_valid = False
         for magic, fmt in valid_formats.items():
@@ -1046,74 +956,71 @@ def _load_image_from_url(image_url: str) -> Optional[str]:
                 is_valid = True
                 print(f"[image] detected format: {fmt} from {image_url}")
                 break
-        
+
         if not is_valid:
-            print(f"[image] warning: {image_url} may not be a valid image format")
-            # Non fallire, prova comunque
-        
-        return base64.b64encode(content).decode('utf-8')
+            print(
+                f"[image] warning: {image_url} may not be a valid image format"
+            )
+
+        return base64.b64encode(content).decode("utf-8")
     except Exception as e:
         print(f"[image] error loading from URL {image_url}: {e}")
         return None
 
+
 def _clean_base64(image_b64: str) -> Optional[str]:
-    """
-    Pulisce e valida un base64 string.
-    Rimuove eventuali prefissi data URL e verifica che sia valido.
-    """
     import base64
     import re
-    
-    # Rimuovi eventuali prefissi data URL (data:image/...;base64,)
-    if image_b64.startswith('data:'):
-        match = re.match(r'data:image/[^;]+;base64,(.+)', image_b64)
+
+    if image_b64.startswith("data:"):
+        match = re.match(r"data:image/[^;]+;base64,(.+)", image_b64)
         if match:
             image_b64 = match.group(1)
         else:
             return None
-    
-    # Rimuovi spazi bianchi
+
     image_b64 = image_b64.strip()
-    
-    # Valida che sia base64 valido
+
     try:
-        # Verifica che contenga solo caratteri base64
-        if not re.match(r'^[A-Za-z0-9+/=]+$', image_b64):
+        if not re.match(r"^[A-Za-z0-9+/=]+$", image_b64):
             print(f"[image] invalid base64 characters")
             return None
-        
-        # Prova a decodificare
+
         decoded = base64.b64decode(image_b64, validate=True)
-        
-        # Verifica che non sia vuoto
+
         if len(decoded) == 0:
             print(f"[image] empty image data")
             return None
-        
-        # Verifica dimensione minima (almeno un byte di header)
+
         if len(decoded) < 10:
             print(f"[image] image too small ({len(decoded)} bytes)")
             return None
-        
+
         return image_b64
     except Exception as e:
         print(f"[image] base64 validation error: {e}")
         return None
 
 
-def _vertex_embed(image_b64: Optional[str] = None, text: Optional[str] = None, model: str = "multimodalembedding@001"):
+def _vertex_embed(
+    image_b64: Optional[str] = None,
+    text: Optional[str] = None,
+    model: str = "multimodalembedding@001",
+):
     if not _VERTEX_AVAILABLE:
         raise RuntimeError("google-cloud-aiplatform not installed")
     project = _discover_gcp_project()
     location = os.environ.get("VERTEX_LOCATION", "us-central1")
     if not project:
-        raise RuntimeError("Cannot determine GCP project_id from credentials; set GOOGLE_APPLICATION_CREDENTIALS(_JSON).")
+        raise RuntimeError(
+            "Cannot determine GCP project_id from credentials; set GOOGLE_APPLICATION_CREDENTIALS(_JSON)."
+        )
     _ensure_gcp_adc()
     aiplatform.init(project=project, location=location)
     from vertexai.vision_models import MultiModalEmbeddingModel, Image
-    mdl = MultiModalEmbeddingModel.from_pretrained(model)
     import base64
-    # Image accetta bytes nel costruttore
+
+    mdl = MultiModalEmbeddingModel.from_pretrained(model)
     image = None
     if image_b64:
         image_bytes = base64.b64decode(image_b64)
@@ -1127,6 +1034,7 @@ def _vertex_embed(image_b64: Optional[str] = None, text: Optional[str] = None, m
         return list(resp.embedding)
     raise RuntimeError("No embedding returned from Vertex AI")
 
+
 @mcp.tool()
 def insert_image_vertex(
     collection: str,
@@ -1135,17 +1043,6 @@ def insert_image_vertex(
     caption: Optional[str] = None,
     id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Inserisce un'immagine in Vertex/Weaviate.
-
-    Usa:
-      - image_id: ottenuto da upload_image o /upload-image
-      - oppure image_url: l'immagine verrà scaricata dal server.
-
-    La conversione in base64 è gestita internamente.
-    NON passare direttamente stringhe base64 da chat.
-    """
-    # 1) recupera base64 a partire da image_id o image_url
     image_b64 = None
 
     if image_id:
@@ -1155,9 +1052,13 @@ def insert_image_vertex(
                 image_b64 = img_data["image_b64"]
             else:
                 _UPLOADED_IMAGES.pop(image_id, None)
-                return {"error": f"Image ID {image_id} has expired. Please upload the image again."}
+                return {
+                    "error": f"Image ID {image_id} has expired. Please upload the image again."
+                }
         else:
-            return {"error": f"Image ID {image_id} not found. Use upload_image or /upload-image first."}
+            return {
+                "error": f"Image ID {image_id} not found. Use upload_image or /upload-image first."
+            }
 
     if image_url and not image_b64:
         image_b64 = _load_image_from_url(image_url)
@@ -1170,7 +1071,6 @@ def insert_image_vertex(
     if not image_b64:
         return {"error": "Either image_id or image_url must be provided"}
 
-    # 2) embedding + insert, come facevi prima
     vec = _vertex_embed(image_b64=image_b64, text=caption)
     client = _connect()
     try:
@@ -1186,23 +1086,23 @@ def insert_image_vertex(
     finally:
         client.close()
 
+
 @mcp.tool()
-def image_search_vertex(collection: str, image_id: Optional[str] = None, image_url: Optional[str] = None, caption: Optional[str] = None, limit: int = 10) -> Dict[str, Any]:
-    """
-    Ricerca vettoriale per immagini usando near_image() (come su Colab).
-    Weaviate gestisce automaticamente l'embedding usando il multi2vec configurato.
-    La conversione in base64 viene gestita automaticamente dal server.
-    Preferisci image_id (da upload_image) > image_url.
-    """
-    # Forza l'uso della collection "Sinde" (come specificato nel prompt)
+def image_search_vertex(
+    collection: str,
+    image_id: Optional[str] = None,
+    image_url: Optional[str] = None,
+    caption: Optional[str] = None,
+    limit: int = 10,
+) -> Dict[str, Any]:
     if collection and collection != "Sinde":
-        print(f"[image_search_vertex] warning: collection '{collection}' requested, but using 'Sinde' as per instructions")
+        print(
+            f"[image_search_vertex] warning: collection '{collection}' requested, but using 'Sinde' as per instructions"
+        )
         collection = "Sinde"
-    
-    # Variabile interna per base64 (non esposta nello schema MCP)
+
     image_b64 = None
-    
-    # Recupera immagine da image_id se fornito (metodo preferito)
+
     if image_id:
         if image_id in _UPLOADED_IMAGES:
             img_data = _UPLOADED_IMAGES[image_id]
@@ -1210,30 +1110,30 @@ def image_search_vertex(collection: str, image_id: Optional[str] = None, image_u
                 image_b64 = img_data["image_b64"]
             else:
                 _UPLOADED_IMAGES.pop(image_id, None)
-                return {"error": f"Image ID {image_id} has expired. Please upload the image again."}
+                return {
+                    "error": f"Image ID {image_id} has expired. Please upload the image again."
+                }
         else:
-            return {"error": f"Image ID {image_id} not found. Please upload the image first using upload_image."}
-    
-    # Carica immagine da URL se fornita e converte in base64 internamente
+            return {
+                "error": f"Image ID {image_id} not found. Please upload the image first using upload_image."
+            }
+
     if image_url and not image_b64:
         image_b64 = _load_image_from_url(image_url)
         if not image_b64:
             return {"error": f"Failed to load image from URL: {image_url}"}
-        # Pulisci e valida il base64 caricato da URL
         image_b64 = _clean_base64(image_b64)
         if not image_b64:
             return {"error": f"Invalid image format from URL: {image_url}"}
-    
+
     if not image_b64:
         return {"error": "Either image_id or image_url must be provided"}
-    
+
     client = _connect()
     try:
         coll = client.collections.get(collection)
         if coll is None:
             return {"error": f"Collection '{collection}' not found"}
-        # Usa near_image() come su Colab - Weaviate gestisce tutto internamente
-        # Il primo parametro è posizionale (base64 string), non keyword
         resp = coll.query.near_image(
             image_b64,
             limit=limit,
@@ -1242,11 +1142,15 @@ def image_search_vertex(collection: str, image_id: Optional[str] = None, image_u
         )
         out = []
         for o in getattr(resp, "objects", []) or []:
-            out.append({
-                "uuid": str(getattr(o, "uuid", "")),
-                "properties": getattr(o, "properties", {}),
-                "distance": getattr(getattr(o, "metadata", None), "distance", None),
-            })
+            out.append(
+                {
+                    "uuid": str(getattr(o, "uuid", "")),
+                    "properties": getattr(o, "properties", {}),
+                    "distance": getattr(
+                        getattr(o, "metadata", None), "distance", None
+                    ),
+                }
+            )
         return {"count": len(out), "results": out}
     finally:
         client.close()
@@ -1254,22 +1158,24 @@ def image_search_vertex(collection: str, image_id: Optional[str] = None, image_u
 
 @mcp.tool()
 def diagnose_vertex() -> Dict[str, Any]:
-    """
-    Report Vertex auth status: project id, whether OAuth refresher is on, header presence, and token expiry sample.
-    """
     info: Dict[str, Any] = {}
     info["project_id"] = _discover_gcp_project()
-    info["oauth_enabled"] = os.environ.get("VERTEX_USE_OAUTH", "").lower() in ("1", "true", "yes")
+    info["oauth_enabled"] = (
+        os.environ.get("VERTEX_USE_OAUTH", "").lower() in ("1", "true", "yes")
+    )
     info["headers_active"] = bool(_VERTEX_HEADERS) if "_VERTEX_HEADERS" in globals() else False
     try:
         from google.oauth2 import service_account
         from google.auth.transport.requests import Request
+
         SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
         gac_path = _resolve_service_account_path()
         token_preview = None
         expiry = None
         if gac_path and os.path.exists(gac_path):
-            creds = service_account.Credentials.from_service_account_file(gac_path, scopes=SCOPES)
+            creds = service_account.Credentials.from_service_account_file(
+                gac_path, scopes=SCOPES
+            )
             creds.refresh(Request())
             token_preview = (creds.token[:12] + "...") if creds.token else None
             expiry = getattr(creds, "expiry", None)
@@ -1288,27 +1194,27 @@ if __name__ == "__main__":
     path = raw_path.rstrip("/")
     if not path:
         path = "/"
-    
-    # mcp.server.fastmcp usa un'API diversa per run()
-    # Prova a ottenere l'app Starlette e usare uvicorn direttamente
+
     try:
         import uvicorn
-        app = getattr(mcp, 'app', None) or getattr(mcp, '_app', None)
+
+        app = getattr(mcp, "app", None) or getattr(mcp, "_app", None)
         if app:
-            # Usa uvicorn per avviare il server su host e porta specificati
             uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
         else:
-            # Fallback: prova a usare mcp.run() se disponibile
             try:
                 mcp.run(transport="streamable-http", port=port)
             except (TypeError, AttributeError) as e:
-                raise RuntimeError(f"Cannot start server: FastMCP app not found and run() failed: {e}")
+                raise RuntimeError(
+                    f"Cannot start server: FastMCP app not found and run() failed: {e}"
+                )
     except ImportError:
-        # Se uvicorn non è disponibile, prova mcp.run()
         try:
             mcp.run(transport="streamable-http", port=port)
         except Exception as e:
-            raise RuntimeError(f"Cannot start server: uvicorn not available and mcp.run() failed: {e}")
+            raise RuntimeError(
+                f"Cannot start server: uvicorn not available and mcp.run() failed: {e}"
+            )
 
 
 # ==== Vertex OAuth Token Refresher (optional) ====
@@ -1322,16 +1228,21 @@ def _write_adc_from_json_env():
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp_path
     _resolve_service_account_path()
 
+
 def _refresh_vertex_oauth_loop():
     from google.oauth2 import service_account
     from google.auth.transport.requests import Request
-    import datetime, time
+    import datetime
+    import time as _time
+
     SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
     cred_path = _resolve_service_account_path()
     if not cred_path or not os.path.exists(cred_path):
         print("[vertex-oauth] GOOGLE_APPLICATION_CREDENTIALS missing; token refresher disabled")
         return
-    creds = service_account.Credentials.from_service_account_file(cred_path, scopes=SCOPES)
+    creds = service_account.Credentials.from_service_account_file(
+        cred_path, scopes=SCOPES
+    )
     global _VERTEX_HEADERS
     while True:
         try:
@@ -1343,17 +1254,20 @@ def _refresh_vertex_oauth_loop():
             if os.environ.get("PALM_APIKEY") == token:
                 os.environ.pop("PALM_APIKEY", None)
             token_preview = token[:10] if token else None
-            print(f"[vertex-oauth] 🔄 Vertex token refreshed (prefix: {token_preview}...)")
+            print(
+                f"[vertex-oauth] 🔄 Vertex token refreshed (prefix: {token_preview}...)"
+            )
             sleep_s = 55 * 60
             if creds.expiry:
                 now = datetime.datetime.utcnow().replace(tzinfo=creds.expiry.tzinfo)
                 delta = (creds.expiry - now).total_seconds() - 300
                 if delta > 300:
                     sleep_s = int(delta)
-            time.sleep(sleep_s)
+            _time.sleep(sleep_s)
         except Exception as e:
             print(f"[vertex-oauth] refresh error: {e}")
-            time.sleep(60)
+            _time.sleep(60)
+
 
 def _maybe_start_vertex_oauth_refresher():
     global _VERTEX_REFRESH_THREAD_STARTED
@@ -1367,9 +1281,11 @@ def _maybe_start_vertex_oauth_refresher():
         print("[vertex-oauth] service account path not found; refresher not started")
         return
     import threading
+
     t = threading.Thread(target=_refresh_vertex_oauth_loop, daemon=True)
     t.start()
     _VERTEX_REFRESH_THREAD_STARTED = True
+
 
 _maybe_start_vertex_oauth_refresher()
 
@@ -1380,6 +1296,7 @@ try:
     _starlette_app = getattr(mcp, "app", None) or getattr(mcp, "_app", None)
 
     if _starlette_app is not None:
+
         async def _mcp_alias(request):
             scope = dict(request.scope)
             scope["path"] = "/mcp/"
@@ -1388,7 +1305,9 @@ try:
 
         _starlette_app.router.routes.insert(
             0,
-            Route("/mcp", endpoint=_mcp_alias, methods=["GET", "HEAD", "POST", "OPTIONS"])
+            Route(
+                "/mcp", endpoint=_mcp_alias, methods=["GET", "HEAD", "POST", "OPTIONS"]
+            ),
         )
 except Exception as _route_err:
     print("[mcp] warning: cannot register MCP alias route:", _route_err)
