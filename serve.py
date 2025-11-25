@@ -1353,12 +1353,12 @@ if __name__ == "__main__":
         raw_path = "/" + raw_path
     path = raw_path.rstrip("/") or "/"
 
-    # Prova prima il transport HTTP classico con host/port/path
+    # Prova prima il transport streamable-http con host/port/path
     try:
         sig = inspect.signature(mcp.run)
         params = sig.parameters
 
-        kwargs = {"transport": "http"}
+        kwargs = {"transport": "streamable-http"}
         if "host" in params:
             kwargs["host"] = host
         if "port" in params:
@@ -1366,15 +1366,29 @@ if __name__ == "__main__":
         if "path" in params:
             kwargs["path"] = path
 
-        print(f"[mcp] starting http server with kwargs: {kwargs}")
+        print(f"[mcp] starting streamable-http server with kwargs: {kwargs}")
         mcp.run(**kwargs)
 
-    except TypeError as e:
+    except (TypeError, ValueError) as e:
         # Se questa versione di FastMCP non supporta host/port/path,
         # fai fallback su streamable-http e prova a pilotarla via env
-        print(f"[mcp] http run() with host/port/path failed: {e}")
+        print(f"[mcp] streamable-http run() with host/port/path failed: {e}")
         os.environ.setdefault("FASTMCP_HOST", host)
         os.environ.setdefault("FASTMCP_PORT", str(port))
         print("[mcp] falling back to streamable-http on 0.0.0.0:$PORT")
-        mcp.run(transport="streamable-http")
+        try:
+            mcp.run(transport="streamable-http")
+        except Exception as e2:
+            # Fallback finale: usa uvicorn direttamente
+            print(f"[mcp] streamable-http also failed: {e2}")
+            try:
+                import uvicorn
+                app = getattr(mcp, "app", None) or getattr(mcp, "_app", None)
+                if app:
+                    print(f"[mcp] using uvicorn fallback on {host}:{port}")
+                    uvicorn.run(app, host=host, port=port, log_level="info")
+                else:
+                    raise RuntimeError("Cannot find FastMCP app")
+            except ImportError:
+                raise RuntimeError(f"Cannot start server: {e2}")
 
