@@ -1341,4 +1341,40 @@ except Exception as _route_err:
 
 # ==== main: avvia il server MCP in modalità streamable-http ==================
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http")
+    import inspect
+
+    # Porta/host che Render si aspetta
+    host = "0.0.0.0"
+    port = int(os.environ.get("PORT", "10000"))
+
+    # Path MCP (come avevi già prima)
+    raw_path = os.environ.get("MCP_PATH", "/mcp")
+    if not raw_path.startswith("/"):
+        raw_path = "/" + raw_path
+    path = raw_path.rstrip("/") or "/"
+
+    # Prova prima il transport HTTP classico con host/port/path
+    try:
+        sig = inspect.signature(mcp.run)
+        params = sig.parameters
+
+        kwargs = {"transport": "http"}
+        if "host" in params:
+            kwargs["host"] = host
+        if "port" in params:
+            kwargs["port"] = port
+        if "path" in params:
+            kwargs["path"] = path
+
+        print(f"[mcp] starting http server with kwargs: {kwargs}")
+        mcp.run(**kwargs)
+
+    except TypeError as e:
+        # Se questa versione di FastMCP non supporta host/port/path,
+        # fai fallback su streamable-http e prova a pilotarla via env
+        print(f"[mcp] http run() with host/port/path failed: {e}")
+        os.environ.setdefault("FASTMCP_HOST", host)
+        os.environ.setdefault("FASTMCP_PORT", str(port))
+        print("[mcp] falling back to streamable-http on 0.0.0.0:$PORT")
+        mcp.run(transport="streamable-http")
+
