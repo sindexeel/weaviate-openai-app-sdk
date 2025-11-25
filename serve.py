@@ -1572,38 +1572,51 @@ async def _handle_read_resource(req: types.ReadResourceRequest) -> types.ServerR
     return types.ServerResult(types.ReadResourceResult(contents=contents))
 
 
+# Salva l'handler originale PRIMA di registrare il nostro
+# Questo permette di delegare gli altri tool all'handler originale di FastMCP
+_original_call_tool_handler = mcp._mcp_server.request_handlers.get(types.CallToolRequest)
+
 async def _call_tool_request(req: types.CallToolRequest) -> types.ServerResult:
     w = SINDE_WIDGET
-    if req.params.name != w.identifier:
+    if req.params.name == w.identifier:
+        # Gestisci il widget tool
+        meta = {
+            "openai/toolInvocation/invoking": w.invoking,
+            "openai/toolInvocation/invoked": w.invoked,
+        }
         return types.ServerResult(
             types.CallToolResult(
                 content=[
                     types.TextContent(
                         type="text",
-                        text=f"Unknown tool: {req.params.name}",
+                        text=w.response_text,
                     )
                 ],
-                isError=True,
+                structuredContent={"widgetReady": True},
+                _meta=meta,
             )
         )
-
-    meta = {
-        "openai/toolInvocation/invoking": w.invoking,
-        "openai/toolInvocation/invoked": w.invoked,
-    }
-
-    # Qui potresti in futuro chiamare i tuoi tool ibridi / image_search,
-    # ma per far apparire il widget basta rispondere qualcosa.
+    
+    # Per tutti gli altri tool, delega all'handler originale di FastMCP
+    # FastMCP gestirà automaticamente i tool definiti con @mcp.tool()
+    if _original_call_tool_handler and _original_call_tool_handler != _call_tool_request:
+        try:
+            return await _original_call_tool_handler(req)
+        except Exception as e:
+            print(f"[mcp] error delegating to original handler: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    # Se non c'è un handler originale o la delega fallisce, restituisci errore
     return types.ServerResult(
         types.CallToolResult(
             content=[
                 types.TextContent(
                     type="text",
-                    text=w.response_text,
+                    text=f"Unknown tool: {req.params.name}",
                 )
             ],
-            structuredContent={"widgetReady": True},
-            _meta=meta,
+            isError=True,
         )
     )
 
