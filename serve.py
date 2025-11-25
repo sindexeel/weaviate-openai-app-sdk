@@ -1572,63 +1572,43 @@ async def _handle_read_resource(req: types.ReadResourceRequest) -> types.ServerR
     return types.ServerResult(types.ReadResourceResult(contents=contents))
 
 
-# Salva l'handler originale PRIMA di registrare il nostro
-# Questo permette di delegare gli altri tool all'handler originale di FastMCP
-_original_call_tool_handler = mcp._mcp_server.request_handlers.get(types.CallToolRequest)
-print(f"[mcp] saved original CallToolRequest handler: {_original_call_tool_handler}")
-
-
 async def _call_tool_request(req: types.CallToolRequest) -> types.ServerResult:
-    """Handler personalizzato che gestisce il widget e delega gli altri tool a FastMCP."""
     w = SINDE_WIDGET
-    
-    # Se è il tool del widget, gestiscilo direttamente
-    if req.params.name == w.identifier:
-        meta = {
-            "openai/toolInvocation/invoking": w.invoking,
-            "openai/toolInvocation/invoked": w.invoked,
-        }
+    if req.params.name != w.identifier:
         return types.ServerResult(
             types.CallToolResult(
                 content=[
                     types.TextContent(
                         type="text",
-                        text=w.response_text,
+                        text=f"Unknown tool: {req.params.name}",
                     )
                 ],
-                structuredContent={"widgetReady": True},
-                _meta=meta,
+                isError=True,
             )
         )
-    
-    # Per tutti gli altri tool (image_search_vertex, hybrid_search, ecc.),
-    # delega all'handler originale di FastMCP che gestisce i @mcp.tool()
-    if _original_call_tool_handler and _original_call_tool_handler != _call_tool_request:
-        try:
-            print(f"[mcp] delegating tool '{req.params.name}' to original FastMCP handler")
-            return await _original_call_tool_handler(req)
-        except Exception as e:
-            print(f"[mcp] error delegating tool '{req.params.name}' to original handler: {e}")
-            import traceback
-            traceback.print_exc()
-    
-    # Se non c'è un handler originale o la delega fallisce, restituisci errore
-    print(f"[mcp] no handler found for tool '{req.params.name}'")
+
+    meta = {
+        "openai/toolInvocation/invoking": w.invoking,
+        "openai/toolInvocation/invoked": w.invoked,
+    }
+
+    # Qui potresti in futuro chiamare i tuoi tool ibridi / image_search,
+    # ma per far apparire il widget basta rispondere qualcosa.
     return types.ServerResult(
         types.CallToolResult(
             content=[
                 types.TextContent(
                     type="text",
-                    text=f"Unknown tool: {req.params.name}",
+                    text=w.response_text,
                 )
             ],
-            isError=True,
+            structuredContent={"widgetReady": True},
+            _meta=meta,
         )
     )
 
 
 # Registra i request handler sul server MCP
-# IMPORTANTE: questo sovrascrive l'handler originale, quindi dobbiamo delegare manualmente
 mcp._mcp_server.request_handlers[types.CallToolRequest] = _call_tool_request
 mcp._mcp_server.request_handlers[types.ReadResourceRequest] = _handle_read_resource
 
