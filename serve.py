@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
-from mcp.types import CallToolResult, TextContent, ResourceContents
 from starlette.responses import JSONResponse
 
 # --- Weaviate client imports (v4) ---
@@ -26,11 +25,7 @@ _UPLOADED_IMAGES: Dict[str, Dict[str, Any]] = {}
 _BASE_DIR = Path(__file__).resolve().parent
 _DEFAULT_PROMPT_PATH = _BASE_DIR / "prompts" / "instructions.md"
 _DEFAULT_DESCRIPTION_PATH = _BASE_DIR / "prompts" / "description.txt"
-
-# Dov'è il build della tua app React (Vite dist)
 _WIDGET_DIST_DIR = _BASE_DIR / "weaviate-image-app" / "dist"
-
-# URL pubblico del server (serve anche gli asset del widget)
 _BASE_URL = os.environ.get("BASE_URL", "https://weaviate-openai-app-sdk.onrender.com")
 
 
@@ -38,6 +33,7 @@ def _build_vertex_header_map(token: str) -> Dict[str, str]:
     headers: Dict[str, str] = {
         "X-Goog-Vertex-Api-Key": token,
     }
+        # user-project opzionale
     if _VERTEX_USER_PROJECT:
         headers["X-Goog-User-Project"] = _VERTEX_USER_PROJECT
     return headers
@@ -52,6 +48,7 @@ def _discover_gcp_project() -> Optional[str]:
                 return data["project_id"]
         except Exception:
             pass
+
     gac_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if gac_path and os.path.exists(gac_path):
         try:
@@ -61,6 +58,7 @@ def _discover_gcp_project() -> Optional[str]:
                 return data["project_id"]
         except Exception:
             pass
+
     try:
         import google.auth
 
@@ -118,12 +116,16 @@ def _load_vertex_user_project(path: str) -> None:
             _VERTEX_USER_PROJECT = data["quota_project_id"]
         if _VERTEX_USER_PROJECT:
             try:
-                print(f"[vertex-oauth] detected service account project: {_VERTEX_USER_PROJECT}")
+                print(
+                    f"[vertex-oauth] detected service account project: {_VERTEX_USER_PROJECT}"
+                )
             except (ValueError, OSError):
                 pass
         else:
             try:
-                print("[vertex-oauth] warning: project_id not found in service account JSON")
+                print(
+                    "[vertex-oauth] warning: project_id not found in service account JSON"
+                )
             except (ValueError, OSError):
                 pass
     except Exception as exc:
@@ -140,6 +142,7 @@ def _sync_refresh_vertex_token() -> bool:
     except Exception as exc:
         print(f"[vertex-oauth] sync refresh unavailable: {exc}")
         return False
+
     cred_path = _resolve_service_account_path()
     if not cred_path or not os.path.exists(cred_path):
         return False
@@ -152,6 +155,7 @@ def _sync_refresh_vertex_token() -> bool:
     except Exception as exc:
         print(f"[vertex-oauth] sync refresh error: {exc}")
         return False
+
     token = creds.token
     if not token:
         return False
@@ -246,7 +250,9 @@ def _connect():
             grpc_meta.setdefault(kk, vertex_key)
     else:
         if "authorization" not in grpc_meta and "_VERTEX_HEADERS" in globals() and _VERTEX_HEADERS:
-            auth = _VERTEX_HEADERS.get("Authorization") or _VERTEX_HEADERS.get("authorization")
+            auth = _VERTEX_HEADERS.get("Authorization") or _VERTEX_HEADERS.get(
+                "authorization"
+            )
             if auth:
                 grpc_meta["authorization"] = auth
 
@@ -337,13 +343,13 @@ def _load_widget_html() -> str:
         return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Image Search Widget</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Image Search Widget</title>
 </head>
 <body>
-    <div id="root"></div>
-    <script type="module" src="{_BASE_URL}/assets/index.js"></script>
+  <div id="root"></div>
+  <script type="module" src="{_BASE_URL}/assets/index.js"></script>
 </body>
 </html>"""
 
@@ -370,78 +376,126 @@ def _load_widget_html() -> str:
         return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Image Search Widget</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Image Search Widget</title>
 </head>
 <body>
-    <div id="root"></div>
-    <script type="module" src="{_BASE_URL}/assets/index.js"></script>
+  <div id="root"></div>
+  <script type="module" src="{_BASE_URL}/assets/index.js"></script>
 </body>
 </html>"""
 
 
-# === WIDGET RESOURCE ===
-
 widget_uri = "ui://widget/image-search.html"
 
 
-@mcp.resource(widget_uri, name="image-search-widget", description="Widget per la ricerca di immagini in Weaviate")
-def image_search_widget_resource() -> List[ResourceContents]:
-    """
-    Risorsa widget HTML per ChatGPT Apps.
-    """
-    widget_html = _load_widget_html()
-    return [
-        ResourceContents(
-            uri=widget_uri,
-            mimeType="text/html+skybridge",
-            text=widget_html,
-            _meta={
-                "openai/widgetPrefersBorder": True,
-                "openai/widgetDomain": "https://chatgpt.com",
-                "openai/widgetCSP": {
-                    "connect_domains": [_BASE_URL],
-                    "resource_domains": ["https://*.oaistatic.com"],
-                },
-            },
-        )
-    ]
-
-
-# === WIDGET TOOL ===
-
-@mcp.tool(
-    name="open_image_search_widget",
-    description="Apri il widget grafico per fare ricerca immagini sulla collection Sinde.",
-    meta={
-        "openai/outputTemplate": widget_uri,
-        "openai/toolInvocation/invoking": "Sto preparando il widget di ricerca immagini…",
-        "openai/toolInvocation/invoked": "Widget di ricerca immagini pronto.",
-    },
+@mcp.resource(
+    uri=widget_uri,
+    name="image-search-widget",
+    description="Widget per la ricerca di immagini in Weaviate",
 )
-def open_image_search_widget() -> CallToolResult:
+def image_search_widget_resource():
+    widget_html = _load_widget_html()
+    return {
+        "contents": [
+            {
+                "uri": widget_uri,
+                "mimeType": "text/html+skybridge",
+                "text": widget_html,
+                "_meta": {
+                    "openai/widgetPrefersBorder": True,
+                    "openai/widgetDomain": "https://chatgpt.com",
+                    "openai/widgetCSP": {
+                        "connect_domains": [_BASE_URL],
+                        "resource_domains": ["https://*.oaistatic.com"],
+                    },
+                },
+            }
+        ],
+    }
+
+
+@mcp.tool()
+def open_image_search_widget() -> Dict[str, Any]:
     """
     Apre il widget interattivo per la ricerca di immagini.
     """
-    return CallToolResult(
-        structuredContent={
+    return {
+        "structuredContent": {
             "widgetReady": True,
             "message": "Widget di ricerca immagini pronto all'uso.",
         },
-        content=[
-            TextContent(
-                type="text",
-                text=(
+        "content": [
+            {
+                "type": "text",
+                "text": (
                     "Ho aperto il widget di ricerca immagini. "
                     "Puoi caricare un'immagine e cercare immagini simili nella collection Sinde."
                 ),
-            )
+            }
         ],
-        _meta={
+        "_meta": {
             "baseUrl": _BASE_URL,
         },
-    )
+    }
+
+
+def _add_tool_metadata():
+    try:
+        if hasattr(mcp, "_tools"):
+            tools = mcp._tools
+        elif hasattr(mcp, "tools"):
+            tools = mcp.tools
+        else:
+            app = getattr(mcp, "app", None) or getattr(mcp, "_app", None)
+            if app and hasattr(app, "state") and hasattr(app.state, "tools"):
+                tools = app.state.tools
+            else:
+                return
+
+        tool_name = "open_image_search_widget"
+        if isinstance(tools, dict) and tool_name in tools:
+            tool_def = tools[tool_name]
+            meta = getattr(tool_def, "_meta", None)
+            if not isinstance(meta, dict):
+                meta = {}
+            meta.update(
+                {
+                    "openai/outputTemplate": widget_uri,
+                    "openai/toolInvocation/invoking": (
+                        "Aprendo il widget di ricerca immagini..."
+                    ),
+                    "openai/toolInvocation/invoked": (
+                        "Widget di ricerca immagini pronto."
+                    ),
+                }
+            )
+            tool_def._meta = meta
+        elif isinstance(tools, list):
+            for tool_def in tools:
+                if getattr(tool_def, "name", None) == tool_name:
+                    meta = getattr(tool_def, "_meta", None)
+                    if not isinstance(meta, dict):
+                        meta = {}
+                    meta.update(
+                        {
+                            "openai/outputTemplate": widget_uri,
+                            "openai/toolInvocation/invoking": (
+                                "Aprendo il widget di ricerca immagini..."
+                            ),
+                            "openai/toolInvocation/invoked": (
+                                "Widget di ricerca immagini pronto."
+                            ),
+                        }
+                    )
+                    tool_def._meta = meta
+                    break
+    except Exception as e:
+        print(f"[widget] Warning: Could not add metadata to tool: {e}")
+
+
+_add_tool_metadata()
 
 
 @mcp.custom_route("/health", methods=["GET"])
@@ -502,6 +556,9 @@ async def serve_assets(request):
 
 @mcp.custom_route("/upload-image", methods=["POST"])
 async def upload_image_endpoint(request):
+    """
+    Endpoint HTTP per upload diretto di immagini.
+    """
     try:
         content_type = request.headers.get("content-type", "")
         image_b64 = None
@@ -534,13 +591,18 @@ async def upload_image_endpoint(request):
             except Exception:
                 return JSONResponse(
                     {
-                        "error": "Invalid request format. Use multipart/form-data with 'image' field or JSON with 'image_b64'"
+                        "error": (
+                            "Invalid request format. Use multipart/form-data with "
+                            "'image' field or JSON with 'image_b64'"
+                        )
                     },
                     status_code=400,
                 )
 
         if not image_b64:
-            return JSONResponse({"error": "No image data provided"}, status_code=400)
+            return JSONResponse(
+                {"error": "No image data provided"}, status_code=400
+            )
 
         cleaned_b64 = _clean_base64(image_b64)
         if not cleaned_b64:
@@ -595,9 +657,7 @@ def reload_instructions() -> Dict[str, Any]:
     _MCP_INSTRUCTIONS = _load_text_source(
         ["MCP_PROMPT", "MCP_INSTRUCTIONS"], _MCP_INSTRUCTIONS_FILE
     )
-    _MCP_DESCRIPTION = _load_text_source(
-        "MCP_DESCRIPTION", _MCP_DESCRIPTION_FILE
-    )
+    _MCP_DESCRIPTION = _load_text_source("MCP_DESCRIPTION", _MCP_DESCRIPTION_FILE)
     _apply_mcp_metadata()
     return get_instructions()
 
@@ -619,9 +679,8 @@ def get_config() -> Dict[str, Any]:
 def debug_widget() -> Dict[str, Any]:
     widget_html_path = _WIDGET_DIST_DIR / "index.html"
     widget_exists = widget_html_path.exists()
-
     assets_dir = _WIDGET_DIST_DIR / "assets"
-    assets_exist = assets_dir.exists()
+    assets_exist = assets_dir.exists() if assets_dir else False
 
     return {
         "widget_html_exists": widget_exists,
@@ -644,7 +703,9 @@ def check_connection() -> Dict[str, Any]:
 
 
 @mcp.tool()
-def upload_image(image_url: Optional[str] = None, image_path: Optional[str] = None) -> Dict[str, Any]:
+def upload_image(
+    image_url: Optional[str] = None, image_path: Optional[str] = None
+) -> Dict[str, Any]:
     global _UPLOADED_IMAGES
 
     cleaned_b64 = None
@@ -652,7 +713,6 @@ def upload_image(image_url: Optional[str] = None, image_path: Optional[str] = No
     if image_path:
         print(f"[upload_image] Loading image from path: {image_path}")
         try:
-            import os
             import base64
 
             if not os.path.exists(image_path):
@@ -748,9 +808,7 @@ def keyword_search(collection: str, query: str, limit: int = 10) -> Dict[str, An
                 {
                     "uuid": str(getattr(o, "uuid", "")),
                     "properties": getattr(o, "properties", {}),
-                    "bm25_score": getattr(
-                        getattr(o, "metadata", None), "score", None
-                    ),
+                    "bm25_score": getattr(getattr(o, "metadata", None), "score", None),
                 }
             )
         return {"count": len(out), "results": out}
@@ -776,9 +834,7 @@ def semantic_search(collection: str, query: str, limit: int = 10) -> Dict[str, A
                 {
                     "uuid": str(getattr(o, "uuid", "")),
                     "properties": getattr(o, "properties", {}),
-                    "distance": getattr(
-                        getattr(o, "metadata", None), "distance", None
-                    ),
+                    "distance": getattr(getattr(o, "metadata", None), "distance", None),
                 }
             )
         return {"count": len(out), "results": out}
@@ -818,11 +874,15 @@ def hybrid_search(
             else:
                 _UPLOADED_IMAGES.pop(image_id, None)
                 return {
-                    "error": f"Image ID {image_id} has expired. Please upload the image again."
+                    "error": (
+                        f"Image ID {image_id} has expired. Please upload the image again."
+                    )
                 }
         else:
             return {
-                "error": f"Image ID {image_id} not found. Please upload the image first using upload_image."
+                "error": (
+                    f"Image ID {image_id} not found. Please upload the image first using upload_image."
+                )
             }
 
     if image_url and not image_b64:
@@ -840,20 +900,13 @@ def hybrid_search(
             return {"error": f"Collection '{collection}' not found"}
 
         if image_b64:
-            vec = _vertex_embed(
-                image_b64=image_b64, text=query if query else None
-            )
-            hybrid_params = {
+            vec = _vertex_embed(image_b64=image_b64, text=query if query else None)
+            hybrid_params: Dict[str, Any] = {
                 "query": query if query else "",
                 "alpha": alpha,
                 "limit": limit,
                 "vector": vec,
-                "return_properties": [
-                    "name",
-                    "source_pdf",
-                    "page_index",
-                    "mediaType",
-                ],
+                "return_properties": ["name", "source_pdf", "page_index", "mediaType"],
                 "return_metadata": MetadataQuery(score=True, distance=True),
             }
             if query_properties:
@@ -864,12 +917,7 @@ def hybrid_search(
                 "query": query,
                 "alpha": alpha,
                 "limit": limit,
-                "return_properties": [
-                    "name",
-                    "source_pdf",
-                    "page_index",
-                    "mediaType",
-                ],
+                "return_properties": ["name", "source_pdf", "page_index", "mediaType"],
                 "return_metadata": MetadataQuery(score=True, distance=True),
             }
             if query_properties:
@@ -894,7 +942,6 @@ def hybrid_search(
         client.close()
 
 
-# ---- Optional: Vertex AI Multimodal Embeddings ----
 try:
     from google.cloud import aiplatform
 
@@ -958,9 +1005,7 @@ def _load_image_from_url(image_url: str) -> Optional[str]:
                 break
 
         if not is_valid:
-            print(
-                f"[image] warning: {image_url} may not be a valid image format"
-            )
+            print(f"[image] warning: {image_url} may not be a valid image format")
 
         return base64.b64encode(content).decode("utf-8")
     except Exception as e:
@@ -983,13 +1028,13 @@ def _clean_base64(image_b64: str) -> Optional[str]:
 
     try:
         if not re.match(r"^[A-Za-z0-9+/=]+$", image_b64):
-            print(f"[image] invalid base64 characters")
+            print("[image] invalid base64 characters")
             return None
 
         decoded = base64.b64decode(image_b64, validate=True)
 
         if len(decoded) == 0:
-            print(f"[image] empty image data")
+            print("[image] empty image data")
             return None
 
         if len(decoded) < 10:
@@ -1016,11 +1061,11 @@ def _vertex_embed(
             "Cannot determine GCP project_id from credentials; set GOOGLE_APPLICATION_CREDENTIALS(_JSON)."
         )
     _ensure_gcp_adc()
-    aiplatform.init(project=project, location=location)
     from vertexai.vision_models import MultiModalEmbeddingModel, Image
-    import base64
 
     mdl = MultiModalEmbeddingModel.from_pretrained(model)
+    import base64
+
     image = None
     if image_b64:
         image_bytes = base64.b64decode(image_b64)
@@ -1057,7 +1102,9 @@ def insert_image_vertex(
                 }
         else:
             return {
-                "error": f"Image ID {image_id} not found. Use upload_image or /upload-image first."
+                "error": (
+                    f"Image ID {image_id} not found. Use upload_image or /upload-image first."
+                )
             }
 
     if image_url and not image_b64:
@@ -1082,7 +1129,10 @@ def insert_image_vertex(
             properties={"caption": caption, "image_b64": image_b64},
             vectors={"image": vec},
         )
-        return {"uuid": str(getattr(obj, "uuid", "")), "named_vector": "image"}
+        return {
+            "uuid": str(getattr(obj, "uuid", "")),
+            "named_vector": "image",
+        }
     finally:
         client.close()
 
@@ -1115,7 +1165,9 @@ def image_search_vertex(
                 }
         else:
             return {
-                "error": f"Image ID {image_id} not found. Please upload the image first using upload_image."
+                "error": (
+                    f"Image ID {image_id} not found. Please upload the image first using upload_image."
+                )
             }
 
     if image_url and not image_b64:
@@ -1146,9 +1198,7 @@ def image_search_vertex(
                 {
                     "uuid": str(getattr(o, "uuid", "")),
                     "properties": getattr(o, "properties", {}),
-                    "distance": getattr(
-                        getattr(o, "metadata", None), "distance", None
-                    ),
+                    "distance": getattr(getattr(o, "metadata", None), "distance", None),
                 }
             )
         return {"count": len(out), "results": out}
@@ -1160,8 +1210,10 @@ def image_search_vertex(
 def diagnose_vertex() -> Dict[str, Any]:
     info: Dict[str, Any] = {}
     info["project_id"] = _discover_gcp_project()
-    info["oauth_enabled"] = (
-        os.environ.get("VERTEX_USE_OAUTH", "").lower() in ("1", "true", "yes")
+    info["oauth_enabled"] = os.environ.get("VERTEX_USE_OAUTH", "").lower() in (
+        "1",
+        "true",
+        "yes",
     )
     info["headers_active"] = bool(_VERTEX_HEADERS) if "_VERTEX_HEADERS" in globals() else False
     try:
@@ -1186,38 +1238,18 @@ def diagnose_vertex() -> Dict[str, Any]:
     return info
 
 
+# ==== main: avvia il server MCP in modalità streamable-http ==================
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "10000"))
-    raw_path = os.environ.get("MCP_PATH", "/mcp")
-    if not raw_path.startswith("/"):
-        raw_path = "/" + raw_path
-    path = raw_path.rstrip("/")
-    if not path:
-        path = "/"
+    # Allinea la porta FastMCP con quella fornita da Render (PORT)
+    port_env = os.environ.get("PORT")
+    if port_env and "FASTMCP_PORT" not in os.environ:
+        os.environ["FASTMCP_PORT"] = port_env
 
-    try:
-        import uvicorn
-
-        app = getattr(mcp, "app", None) or getattr(mcp, "_app", None)
-        if app:
-            uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
-        else:
-            try:
-                mcp.run(transport="streamable-http", port=port)
-            except (TypeError, AttributeError) as e:
-                raise RuntimeError(
-                    f"Cannot start server: FastMCP app not found and run() failed: {e}"
-                )
-    except ImportError:
-        try:
-            mcp.run(transport="streamable-http", port=port)
-        except Exception as e:
-            raise RuntimeError(
-                f"Cannot start server: uvicorn not available and mcp.run() failed: {e}"
-            )
+    # Avvia FastMCP in modalità HTTP (streamable-http)
+    mcp.run(transport="streamable-http")
 
 
-# ==== Vertex OAuth Token Refresher (optional) ====
+# ==== Vertex OAuth Token Refresher (optional) ===============================
 def _write_adc_from_json_env():
     gac_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
     gac_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
@@ -1233,7 +1265,6 @@ def _refresh_vertex_oauth_loop():
     from google.oauth2 import service_account
     from google.auth.transport.requests import Request
     import datetime
-    import time as _time
 
     SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
     cred_path = _resolve_service_account_path()
@@ -1254,19 +1285,17 @@ def _refresh_vertex_oauth_loop():
             if os.environ.get("PALM_APIKEY") == token:
                 os.environ.pop("PALM_APIKEY", None)
             token_preview = token[:10] if token else None
-            print(
-                f"[vertex-oauth] 🔄 Vertex token refreshed (prefix: {token_preview}...)"
-            )
+            print(f"[vertex-oauth] 🔄 Vertex token refreshed (prefix: {token_preview}...)")
             sleep_s = 55 * 60
             if creds.expiry:
                 now = datetime.datetime.utcnow().replace(tzinfo=creds.expiry.tzinfo)
                 delta = (creds.expiry - now).total_seconds() - 300
                 if delta > 300:
                     sleep_s = int(delta)
-            _time.sleep(sleep_s)
+            time.sleep(sleep_s)
         except Exception as e:
             print(f"[vertex-oauth] refresh error: {e}")
-            _time.sleep(60)
+            time.sleep(60)
 
 
 def _maybe_start_vertex_oauth_refresher():
@@ -1289,7 +1318,7 @@ def _maybe_start_vertex_oauth_refresher():
 
 _maybe_start_vertex_oauth_refresher()
 
-# --- Allinea gli endpoint MCP sia con slash che senza ---
+# --- Alias /mcp senza slash finale, se serve --------------------------------
 try:
     from starlette.routing import Route
 
@@ -1306,7 +1335,9 @@ try:
         _starlette_app.router.routes.insert(
             0,
             Route(
-                "/mcp", endpoint=_mcp_alias, methods=["GET", "HEAD", "POST", "OPTIONS"]
+                "/mcp",
+                endpoint=_mcp_alias,
+                methods=["GET", "HEAD", "POST", "OPTIONS"],
             ),
         )
 except Exception as _route_err:
