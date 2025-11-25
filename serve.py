@@ -321,9 +321,7 @@ _MCP_DESCRIPTION = _load_text_source("MCP_DESCRIPTION", _MCP_DESCRIPTION_FILE)
 
 mcp = FastMCP(_MCP_SERVER_NAME)
 
-# Prima registra i widget decorati (se presenti)
-# La registrazione manuale della risorsa verrà fatta dopo che _load_widget_html è definita
-register_decorated_widgets(mcp)
+# I widget decorati verranno registrati dopo che sono stati definiti
 
 def _apply_mcp_metadata():
     try:
@@ -413,112 +411,24 @@ def _load_widget_html() -> str:
     template_uri="ui://widget/image-search.html",
     invoking="Apro il widget di ricerca immagini...",
     invoked="Widget immagini pronto.",
-    html=_load_widget_html(),  # Carica il HTML dal file buildato
+    html=_load_widget_html(),
     description=(
         "Widget per caricare un'immagine e fare image_search_vertex "
         "sulla collection Sinde nel cluster Weaviate."
     ),
 )
 def image_search_widget() -> dict:
-    """
-    Funzione widget che restituisce la risposta con il widget HTML.
-    Questa funzione è decorata con @widget e viene registrata come risorsa MCP.
-    """
-    response = build_widget_tool_response(
+    """Funzione widget che restituisce la risposta con il widget HTML."""
+    return build_widget_tool_response(
         response_text="Ho aperto il widget di ricerca immagini.",
         structured_content={},
     )
-    
-    # Debug: verifica cosa restituisce build_widget_tool_response
-    print(f"[widget] build_widget_tool_response returned: {type(response)}, keys: {list(response.keys()) if isinstance(response, dict) else 'not a dict'}")
-    
-    return response
 
 
-# Dopo che _load_widget_html è definita, registra manualmente la risorsa widget
-# come nella guida ufficiale OpenAI Apps SDK
-def _register_widget_resource():
-    """Registra manualmente la risorsa widget come nella guida ufficiale."""
-    try:
-        # Carica il widget HTML
-        widget_html = _load_widget_html()
-        print(f"[widget] 📄 Widget HTML loaded, length: {len(widget_html)} chars")
-        
-        # Verifica se il widget HTML contiene il div root
-        if '<div id="root">' not in widget_html:
-            print("[widget] ⚠️ WARNING: Widget HTML might not contain <div id='root'>")
-        
-        # Registra la risorsa widget manualmente
-        # FastMCP potrebbe supportare la registrazione tramite attributi o metodi
-        registered = False
-        
-        if hasattr(mcp, 'register_resource') or hasattr(mcp, 'add_resource'):
-            register_func = getattr(mcp, 'register_resource', None) or getattr(mcp, 'add_resource', None)
-            if register_func:
-                register_func(
-                    uri="ui://widget/image-search.html",
-                    name="image-search-widget",
-                    description="Widget per la ricerca di immagini in Weaviate",
-                    mimeType="text/html+skybridge",
-                )
-                print("[widget] ✅ Widget resource registered manually via register_resource")
-                registered = True
-        
-        if not registered and hasattr(mcp, '_resources'):
-            # Prova ad aggiungere direttamente alle risorse
-            resources = getattr(mcp, '_resources', {})
-            if isinstance(resources, dict):
-                resources["ui://widget/image-search.html"] = {
-                    "uri": "ui://widget/image-search.html",
-                    "name": "image-search-widget",
-                    "description": "Widget per la ricerca di immagini in Weaviate",
-                    "mimeType": "text/html+skybridge",
-                    "contents": [{
-                        "uri": "ui://widget/image-search.html",
-                        "mimeType": "text/html+skybridge",
-                        "text": widget_html,
-                    }]
-                }
-                print("[widget] ✅ Widget resource added to _resources")
-                registered = True
-                print(f"[widget] 📋 Resources dict now has {len(resources)} resources")
-        
-        if not registered:
-            print("[widget] ⚠️ Cannot find method to register resource manually, using register_decorated_widgets")
-            print(f"[widget] 🔍 MCP object attributes: {[attr for attr in dir(mcp) if not attr.startswith('__')]}")
-    except Exception as e:
-        print(f"[widget] ❌ Error registering widget resource manually: {e}")
-        import traceback
-        traceback.print_exc()
+# Registra i widget decorati dopo che sono stati definiti
+register_decorated_widgets(mcp)
 
-# Registra la risorsa widget dopo che è stata definita
-_register_widget_resource()
 
-# Prova ad aggiungere metadata direttamente al tool dopo la registrazione
-# FastMCP potrebbe non supportare _meta nel decorator, quindi lo aggiungiamo dopo
-def _add_widget_metadata_to_tool():
-    """Aggiunge metadata OpenAI al tool per associarlo al widget."""
-    try:
-        # Ottieni la funzione del tool
-        tool_func = open_image_search_widget
-        
-        # Prova ad aggiungere metadata tramite attributi della funzione
-        if not hasattr(tool_func, '__mcp_meta__'):
-            tool_func.__mcp_meta__ = {}
-        
-        tool_func.__mcp_meta__.update({
-            "openai/outputTemplate": "ui://widget/image-search.html",
-            "openai/toolInvocation/invoking": "Aprendo il widget di ricerca immagini...",
-            "openai/toolInvocation/invoked": "Widget di ricerca immagini aperto.",
-        })
-        
-        print("[widget] Added metadata to open_image_search_widget tool")
-    except Exception as e:
-        print(f"[widget] Warning: Could not add metadata to tool: {e}")
-
-# Definisci il tool con metadata nella definizione (come nella guida ufficiale)
-# I metadata devono essere nella definizione del tool, non solo nella risposta
-# Seguiamo esattamente la guida ufficiale OpenAI Apps SDK
 @mcp.tool
 def open_image_search_widget() -> Dict[str, Any]:
     """
@@ -530,54 +440,34 @@ def open_image_search_widget() -> Dict[str, Any]:
     - Visualizzare i risultati in modo interattivo
     
     Il widget si aprirà nell'interfaccia di ChatGPT e potrai usarlo direttamente.
-    Il widget caricherà automaticamente l'immagine e chiamerà image_search_vertex tramite window.openai.callTool.
     """
-    # Restituisce la risposta seguendo esattamente il formato della guida ufficiale
-    # La risposta deve includere content, structuredContent E i metadata
-    widget_response = image_search_widget()
-    
-    # Aggiungi i metadata nella risposta (come nella guida ufficiale)
-    # I metadata devono essere nella struttura principale della risposta
-    if isinstance(widget_response, dict):
-        # Assicurati che ci siano content e structuredContent
-        if "content" not in widget_response:
-            widget_response["content"] = []
-        if "structuredContent" not in widget_response:
-            widget_response["structuredContent"] = {}
-        
-        # Aggiungi i metadata nella struttura principale
-        # Dalla guida ufficiale, i metadata devono essere qui
-        widget_response["_meta"] = {
-            "openai/outputTemplate": "ui://widget/image-search.html",
-        }
-        
-        print(f"[widget] ✅ Response with metadata: {json.dumps(widget_response, indent=2, default=str)}")
-    
-    return widget_response
+    return image_search_widget()
 
-# Aggiungi metadata dopo la definizione del tool (per compatibilità)
-_add_widget_metadata_to_tool()
 
-# Prova ad aggiungere metadata direttamente al tool registrato in FastMCP
-# Questo potrebbe essere necessario perché i metadata devono essere nella definizione del tool
-try:
-    # FastMCP potrebbe memorizzare i tool in un attributo specifico
-    # Prova ad accedere ai tool registrati e aggiungere i metadata
-    if hasattr(mcp, '_tools') or hasattr(mcp, 'tools'):
-        tools_dict = getattr(mcp, '_tools', None) or getattr(mcp, 'tools', None)
-        if isinstance(tools_dict, dict) and 'open_image_search_widget' in tools_dict:
-            tool_info = tools_dict['open_image_search_widget']
-            if isinstance(tool_info, dict):
-                if '_meta' not in tool_info:
-                    tool_info['_meta'] = {}
-                tool_info['_meta'].update({
-                    "openai/outputTemplate": "ui://widget/image-search.html",
-                    "openai/toolInvocation/invoking": "Aprendo il widget di ricerca immagini...",
-                    "openai/toolInvocation/invoked": "Widget di ricerca immagini aperto.",
-                })
-                print("[widget] Added metadata to tool definition in FastMCP")
-except Exception as e:
-    print(f"[widget] Warning: Could not add metadata to tool definition: {e}")
+# Aggiungi i metadata OpenAI al tool come richiesto dalla guida ufficiale
+# I metadata devono essere nella definizione del tool quando ChatGPT chiede la lista dei tool
+def _add_openai_metadata_to_tool():
+    """Aggiunge metadata openai/outputTemplate al tool come nella guida ufficiale."""
+    try:
+        # FastMCP memorizza i tool in _tools o tools
+        tools_attr = getattr(mcp, '_tools', None) or getattr(mcp, 'tools', None)
+        if tools_attr and isinstance(tools_attr, dict):
+            tool_name = 'open_image_search_widget'
+            if tool_name in tools_attr:
+                tool_def = tools_attr[tool_name]
+                # Aggiungi _meta se non esiste
+                if not hasattr(tool_def, '_meta'):
+                    tool_def._meta = {}
+                elif not isinstance(tool_def._meta, dict):
+                    tool_def._meta = {}
+                
+                # Aggiungi openai/outputTemplate
+                tool_def._meta['openai/outputTemplate'] = 'ui://widget/image-search.html'
+    except Exception as e:
+        pass  # Silently fail, fastmcp_apps_sdk potrebbe gestirlo automaticamente
+
+# Chiama dopo che tutti i tool sono stati registrati
+_add_openai_metadata_to_tool()
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health(_request):
