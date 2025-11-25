@@ -1446,130 +1446,31 @@ except Exception as _route_err:
 
 # ==== Esponi l'app ASGI per uvicorn (per uso diretto nello start command) ====
 # Puoi usare: uvicorn serve:app --host 0.0.0.0 --port $PORT
-def _get_fastmcp_app():
-    """Ottiene l'app ASGI Starlette da FastMCP per uso con uvicorn diretto."""
-    from starlette.applications import Starlette
-    
-    # Prova vari modi per ottenere l'app
-    app = None
-    
-    # Metodo 1: attributi diretti
-    for attr_name in ["app", "_app", "asgi_app", "_asgi_app"]:
-        app = getattr(mcp, attr_name, None)
-        if app and isinstance(app, Starlette):
-            print(f"[mcp] found app via mcp.{attr_name}")
-            return app
-    
-    # Metodo 2: tramite _server se disponibile
-    server = getattr(mcp, "_server", None)
-    if server:
-        for attr_name in ["app", "_app", "asgi_app", "_asgi_app"]:
-            app = getattr(server, attr_name, None)
-            if app and isinstance(app, Starlette):
-                print(f"[mcp] found app via mcp._server.{attr_name}")
-                return app
-    
-    # Metodo 3: tramite _transport se disponibile
-    transport = getattr(mcp, "_transport", None)
-    if transport:
-        for attr_name in ["app", "_app", "asgi_app", "_asgi_app"]:
-            app = getattr(transport, attr_name, None)
-            if app and isinstance(app, Starlette):
-                print(f"[mcp] found app via mcp._transport.{attr_name}")
-                return app
-    
-    # Se non troviamo l'app, restituisci None
-    # L'app verrà inizializzata quando mcp.run() viene chiamato
-    return None
+# Come nell'esempio Pizzaz, usiamo semplicemente mcp.streamable_http_app()
+app = mcp.streamable_http_app()
 
-# Esponi l'app come variabile di modulo (None se non disponibile)
-app = _get_fastmcp_app()
+# Aggiungi CORS middleware se disponibile (opzionale)
+try:
+    from starlette.middleware.cors import CORSMiddleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+        allow_credentials=False,
+    )
+except Exception:
+    pass
 
-# ==== main: avvia il server MCP in modalità streamable-http ==================
+# ==== main: avvia il server con uvicorn (come nell'esempio Pizzaz) ==================
 if __name__ == "__main__":
-    import inspect
-
+    import uvicorn
+    
     # Porta/host che Render si aspetta
     host = "0.0.0.0"
     port = int(os.environ.get("PORT", "10000"))
-
-    # Path MCP (come avevi già prima)
-    raw_path = os.environ.get("MCP_PATH", "/mcp")
-    if not raw_path.startswith("/"):
-        raw_path = "/" + raw_path
-    path = raw_path.rstrip("/") or "/"
-
-    # Configura le variabili d'ambiente PRIMA di chiamare mcp.run()
-    # FastMCP potrebbe leggerle automaticamente
-    os.environ.setdefault("FASTMCP_HOST", host)
-    os.environ.setdefault("FASTMCP_PORT", str(port))
     
-    # Prova prima a usare uvicorn direttamente (più affidabile per Render)
-    try:
-        import uvicorn
-        from starlette.applications import Starlette
-        
-        # Prova vari modi per ottenere l'app Starlette in modo più aggressivo
-        app = None
-        
-        # Metodo 1: attributi diretti
-        for attr_name in ["app", "_app", "asgi_app", "_asgi_app"]:
-            app = getattr(mcp, attr_name, None)
-            if app and isinstance(app, Starlette):
-                print(f"[mcp] found app via mcp.{attr_name}")
-                break
-        
-        # Metodo 2: tramite _server se disponibile
-        if not app:
-            server = getattr(mcp, "_server", None)
-            if server:
-                for attr_name in ["app", "_app", "asgi_app", "_asgi_app"]:
-                    app = getattr(server, attr_name, None)
-                    if app and isinstance(app, Starlette):
-                        print(f"[mcp] found app via mcp._server.{attr_name}")
-                        break
-        
-        # Metodo 3: tramite _transport se disponibile
-        if not app:
-            transport = getattr(mcp, "_transport", None)
-            if transport:
-                for attr_name in ["app", "_app", "asgi_app", "_asgi_app"]:
-                    app = getattr(transport, attr_name, None)
-                    if app and isinstance(app, Starlette):
-                        print(f"[mcp] found app via mcp._transport.{attr_name}")
-                        break
-        
-        # Metodo 4: cerca in tutti gli attributi di mcp
-        if not app:
-            for attr_name in dir(mcp):
-                if not attr_name.startswith("__"):
-                    try:
-                        attr = getattr(mcp, attr_name)
-                        if isinstance(attr, Starlette):
-                            app = attr
-                            print(f"[mcp] found app via mcp.{attr_name}")
-                            break
-                    except:
-                        pass
-        
-        if app:
-            print(f"[mcp] starting server with uvicorn on {host}:{port}")
-            uvicorn.run(app, host=host, port=port, log_level="info")
-        else:
-            # Se non troviamo l'app, usa mcp.run() con streamable-http
-            # Il patch di uvicorn.run() è già stato applicato all'inizio del file
-            print("[mcp] FastMCP app not found, using mcp.run() with streamable-http")
-            print(f"[mcp] uvicorn.run() already patched at module level")
-            print(f"[mcp] configured FASTMCP_HOST={host}, FASTMCP_PORT={port}")
-            mcp.run(transport="streamable-http")
-    except ImportError:
-        # Se uvicorn non è disponibile, usa direttamente mcp.run()
-        print("[mcp] uvicorn not available, using mcp.run() with streamable-http")
-        print(f"[mcp] configured FASTMCP_HOST={host}, FASTMCP_PORT={port}")
-        mcp.run(transport="streamable-http")
-    except Exception as e:
-        # Fallback finale: usa mcp.run() anche se uvicorn è disponibile ma fallisce
-        print(f"[mcp] uvicorn failed: {e}, falling back to mcp.run()")
-        print(f"[mcp] configured FASTMCP_HOST={host}, FASTMCP_PORT={port}")
-        mcp.run(transport="streamable-http")
+    # Usa uvicorn direttamente con l'app esposta
+    # Come nell'esempio Pizzaz: uvicorn.run("main:app", host="0.0.0.0", port=8000)
+    uvicorn.run("serve:app", host=host, port=port)
 
