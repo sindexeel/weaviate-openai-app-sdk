@@ -5,6 +5,9 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from functools import lru_cache
+import mcp.types as types
 
 # Monkey-patch uvicorn.run() PRIMA che FastMCP lo importi
 # Questo forza host=0.0.0.0 e port=PORT per Render
@@ -497,7 +500,51 @@ def _load_widget_html() -> str:
 </html>"""
 
 
+@dataclass(frozen=True)
+class SindeWidget:
+    identifier: str
+    title: str
+    template_uri: str
+    invoking: str
+    invoked: str
+    html: str
+    response_text: str
+
+
+@lru_cache(maxsize=None)
+def _load_widget_html_cached() -> str:
+    return _load_widget_html()
+
+
 widget_uri = "ui://widget/image-search.html"
+
+
+SINDE_WIDGET = SindeWidget(
+    identifier="open_image_search_widget",          # nome del tool
+    title="Sinde Image Search",                     # come vuoi vederlo in ChatGPT
+    template_uri=widget_uri,
+    invoking="Apro il widget di ricerca immagini Sinde...",
+    invoked="Widget di ricerca immagini Sinde pronto.",
+    html=_load_widget_html_cached(),                # HTML già buildato
+    response_text="Ho aperto il widget di ricerca immagini Sinde.",
+)
+
+
+MIME_TYPE = "text/html+skybridge"
+
+
+def _tool_meta(widget: SindeWidget) -> Dict[str, Any]:
+    return {
+        "openai/outputTemplate": widget.template_uri,
+        "openai/toolInvocation/invoking": widget.invoking,
+        "openai/toolInvocation/invoked": widget.invoked,
+        "openai/widgetAccessible": True,
+        "openai/resultCanProduceWidget": True,
+    }
+
+
+def _resource_description(widget: SindeWidget) -> str:
+    return f"{widget.title} widget markup"
 
 
 @mcp.resource(
@@ -526,86 +573,86 @@ def image_search_widget_resource():
     }
 
 
-@mcp.tool()
-def open_image_search_widget() -> Dict[str, Any]:
-    """
-    Apre il widget interattivo per la ricerca di immagini.
-    """
-    return {
-        "structuredContent": {
-            "widgetReady": True,
-            "message": "Widget di ricerca immagini pronto all'uso.",
-        },
-        "content": [
-            {
-                "type": "text",
-                "text": (
-                    "Ho aperto il widget di ricerca immagini. "
-                    "Puoi caricare un'immagine e cercare immagini simili nella collection Sinde."
-                ),
-            }
-        ],
-        "_meta": {
-            "baseUrl": _BASE_URL,
-        },
-    }
+# @mcp.tool()
+# def open_image_search_widget() -> Dict[str, Any]:
+#     """
+#     Apre il widget interattivo per la ricerca di immagini.
+#     """
+#     return {
+#         "structuredContent": {
+#             "widgetReady": True,
+#             "message": "Widget di ricerca immagini pronto all'uso.",
+#         },
+#         "content": [
+#             {
+#                 "type": "text",
+#                 "text": (
+#                     "Ho aperto il widget di ricerca immagini. "
+#                     "Puoi caricare un'immagine e cercare immagini simili nella collection Sinde."
+#                 ),
+#             }
+#         ],
+#         "_meta": {
+#             "baseUrl": _BASE_URL,
+#         },
+#     }
 
 
-def _add_tool_metadata():
-    try:
-        if hasattr(mcp, "_tools"):
-            tools = mcp._tools
-        elif hasattr(mcp, "tools"):
-            tools = mcp.tools
-        else:
-            app = getattr(mcp, "app", None) or getattr(mcp, "_app", None)
-            if app and hasattr(app, "state") and hasattr(app.state, "tools"):
-                tools = app.state.tools
-            else:
-                return
-
-        tool_name = "open_image_search_widget"
-        if isinstance(tools, dict) and tool_name in tools:
-            tool_def = tools[tool_name]
-            meta = getattr(tool_def, "_meta", None)
-            if not isinstance(meta, dict):
-                meta = {}
-            meta.update(
-                {
-                    "openai/outputTemplate": widget_uri,
-                    "openai/toolInvocation/invoking": (
-                        "Aprendo il widget di ricerca immagini..."
-                    ),
-                    "openai/toolInvocation/invoked": (
-                        "Widget di ricerca immagini pronto."
-                    ),
-                }
-            )
-            tool_def._meta = meta
-        elif isinstance(tools, list):
-            for tool_def in tools:
-                if getattr(tool_def, "name", None) == tool_name:
-                    meta = getattr(tool_def, "_meta", None)
-                    if not isinstance(meta, dict):
-                        meta = {}
-                    meta.update(
-                        {
-                            "openai/outputTemplate": widget_uri,
-                            "openai/toolInvocation/invoking": (
-                                "Aprendo il widget di ricerca immagini..."
-                            ),
-                            "openai/toolInvocation/invoked": (
-                                "Widget di ricerca immagini pronto."
-                            ),
-                        }
-                    )
-                    tool_def._meta = meta
-                    break
-    except Exception as e:
-        print(f"[widget] Warning: Could not add metadata to tool: {e}")
-
-
-_add_tool_metadata()
+# def _add_tool_metadata():
+#     try:
+#         if hasattr(mcp, "_tools"):
+#             tools = mcp._tools
+#         elif hasattr(mcp, "tools"):
+#             tools = mcp.tools
+#         else:
+#             app = getattr(mcp, "app", None) or getattr(mcp, "_app", None)
+#             if app and hasattr(app, "state") and hasattr(app.state, "tools"):
+#                 tools = app.state.tools
+#             else:
+#                 return
+#
+#         tool_name = "open_image_search_widget"
+#         if isinstance(tools, dict) and tool_name in tools:
+#             tool_def = tools[tool_name]
+#             meta = getattr(tool_def, "_meta", None)
+#             if not isinstance(meta, dict):
+#                 meta = {}
+#             meta.update(
+#                 {
+#                     "openai/outputTemplate": widget_uri,
+#                     "openai/toolInvocation/invoking": (
+#                         "Aprendo il widget di ricerca immagini..."
+#                     ),
+#                     "openai/toolInvocation/invoked": (
+#                         "Widget di ricerca immagini pronto."
+#                     ),
+#                 }
+#             )
+#             tool_def._meta = meta
+#         elif isinstance(tools, list):
+#             for tool_def in tools:
+#                 if getattr(tool_def, "name", None) == tool_name:
+#                     meta = getattr(tool_def, "_meta", None)
+#                     if not isinstance(meta, dict):
+#                         meta = {}
+#                     meta.update(
+#                         {
+#                             "openai/outputTemplate": widget_uri,
+#                             "openai/toolInvocation/invoking": (
+#                                 "Aprendo il widget di ricerca immagini..."
+#                             ),
+#                             "openai/toolInvocation/invoked": (
+#                                 "Widget di ricerca immagini pronto."
+#                             ),
+#                         }
+#                     )
+#                     tool_def._meta = meta
+#                     break
+#     except Exception as e:
+#         print(f"[widget] Warning: Could not add metadata to tool: {e}")
+#
+#
+# _add_tool_metadata()
 
 
 @mcp.custom_route("/health", methods=["GET"])
@@ -1443,6 +1490,128 @@ try:
         )
 except Exception as _route_err:
     print("[mcp] warning: cannot register MCP alias route:", _route_err)
+
+# ==== Definizioni MCP di basso livello per il widget (come in Pizzaz) ====
+TOOL_INPUT_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {},          # nessun argomento per aprire il widget
+    "required": [],
+    "additionalProperties": False,
+}
+
+
+@mcp._mcp_server.list_tools()
+async def _list_tools() -> List[types.Tool]:
+    """Espone il tool widget a ChatGPT (come in Pizzaz)."""
+    w = SINDE_WIDGET
+    return [
+        types.Tool(
+            name=w.identifier,
+            title=w.title,
+            description=w.title,
+            inputSchema=TOOL_INPUT_SCHEMA,
+            _meta=_tool_meta(w),
+            annotations={
+                "destructiveHint": False,
+                "openWorldHint": False,
+                "readOnlyHint": True,
+            },
+        )
+    ]
+
+
+@mcp._mcp_server.list_resources()
+async def _list_resources() -> List[types.Resource]:
+    w = SINDE_WIDGET
+    return [
+        types.Resource(
+            name=w.title,
+            title=w.title,
+            uri=w.template_uri,
+            description=_resource_description(w),
+            mimeType=MIME_TYPE,
+            _meta=_tool_meta(w),
+        )
+    ]
+
+
+@mcp._mcp_server.list_resource_templates()
+async def _list_resource_templates() -> List[types.ResourceTemplate]:
+    w = SINDE_WIDGET
+    return [
+        types.ResourceTemplate(
+            name=w.title,
+            title=w.title,
+            uriTemplate=w.template_uri,
+            description=_resource_description(w),
+            mimeType=MIME_TYPE,
+            _meta=_tool_meta(w),
+        )
+    ]
+
+
+async def _handle_read_resource(req: types.ReadResourceRequest) -> types.ServerResult:
+    w = SINDE_WIDGET
+    if str(req.params.uri) != w.template_uri:
+        return types.ServerResult(
+            types.ReadResourceResult(
+                contents=[],
+                _meta={"error": f"Unknown resource: {req.params.uri}"},
+            )
+        )
+
+    contents = [
+        types.TextResourceContents(
+            uri=w.template_uri,
+            mimeType=MIME_TYPE,
+            text=w.html,
+            _meta=_tool_meta(w),
+        )
+    ]
+
+    return types.ServerResult(types.ReadResourceResult(contents=contents))
+
+
+async def _call_tool_request(req: types.CallToolRequest) -> types.ServerResult:
+    w = SINDE_WIDGET
+    if req.params.name != w.identifier:
+        return types.ServerResult(
+            types.CallToolResult(
+                content=[
+                    types.TextContent(
+                        type="text",
+                        text=f"Unknown tool: {req.params.name}",
+                    )
+                ],
+                isError=True,
+            )
+        )
+
+    meta = {
+        "openai/toolInvocation/invoking": w.invoking,
+        "openai/toolInvocation/invoked": w.invoked,
+    }
+
+    # Qui potresti in futuro chiamare i tuoi tool ibridi / image_search,
+    # ma per far apparire il widget basta rispondere qualcosa.
+    return types.ServerResult(
+        types.CallToolResult(
+            content=[
+                types.TextContent(
+                    type="text",
+                    text=w.response_text,
+                )
+            ],
+            structuredContent={"widgetReady": True},
+            _meta=meta,
+        )
+    )
+
+
+# Registra i request handler sul server MCP
+mcp._mcp_server.request_handlers[types.CallToolRequest] = _call_tool_request
+mcp._mcp_server.request_handlers[types.ReadResourceRequest] = _handle_read_resource
+
 
 # ==== Esponi l'app ASGI per uvicorn (per uso diretto nello start command) ====
 # Puoi usare: uvicorn serve:app --host 0.0.0.0 --port $PORT
