@@ -316,7 +316,8 @@ _MCP_INSTRUCTIONS = _load_text_source(
 )
 _MCP_DESCRIPTION = _load_text_source("MCP_DESCRIPTION", _MCP_DESCRIPTION_FILE)
 
-mcp = FastMCP(_MCP_SERVER_NAME)
+SERVER_PORT = int(os.environ.get("PORT", "10000"))
+mcp = FastMCP(_MCP_SERVER_NAME, port=SERVER_PORT)
 
 
 def _apply_mcp_metadata():
@@ -1240,19 +1241,7 @@ def diagnose_vertex() -> Dict[str, Any]:
 
 # ==== main: avvia il server MCP in modalità streamable-http ==================
 if __name__ == "__main__":
-    import uvicorn
-
-    # Porta fornita da Render (altrimenti fallback 10000 per sviluppo locale)
-    port = int(os.environ.get("PORT", "10000"))
-
-    # L'app ASGI di FastMCP (Starlette)
-    app = getattr(mcp, "app", None) or getattr(mcp, "_app", None)
-    if app is None:
-        raise RuntimeError("FastMCP ASGI app not found (mcp.app is None)")
-
-    # Avvia uvicorn in ascolto su 0.0.0.0:<PORT>
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
-
+    mcp.run(transport="streamable-http")
 
 # ==== Vertex OAuth Token Refresher (optional) ===============================
 def _write_adc_from_json_env():
