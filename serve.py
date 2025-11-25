@@ -1279,7 +1279,25 @@ if __name__ == "__main__":
     path = raw_path.rstrip("/")
     if not path:
         path = "/"
-    mcp.run(transport="http", host="0.0.0.0", port=port, path=path)
+    # mcp.server.fastmcp usa un'API diversa per run()
+    # Prova prima con i parametri standard, altrimenti usa l'approccio alternativo
+    try:
+        mcp.run(transport="streamable-http", port=port)
+    except TypeError:
+        # Se non supporta port, prova senza parametri o con un approccio diverso
+        try:
+            mcp.run()
+        except Exception as e:
+            # Fallback: usa uvicorn direttamente se disponibile
+            try:
+                import uvicorn
+                app = getattr(mcp, 'app', None) or getattr(mcp, '_app', None)
+                if app:
+                    uvicorn.run(app, host="0.0.0.0", port=port)
+                else:
+                    raise RuntimeError("Cannot find FastMCP app to run")
+            except ImportError:
+                raise RuntimeError(f"Cannot start server: {e}")
 
 
 # ==== Vertex OAuth Token Refresher (optional) ====
