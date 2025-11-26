@@ -1,5 +1,5 @@
 // src/ImageSearchWidget.tsx
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 
 // URL base del tuo server MCP (quello con serve.py)
 const MCP_BASE_URL = "https://weaviate-openai-app-sdk.onrender.com";
@@ -22,6 +22,21 @@ export const ImageSearchWidget: React.FC = () => {
   const [status, setStatus] = useState<string | null>(null);
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [enlargedImage, setEnlargedImage] = useState<{
+    src: string;
+    alt: string;
+  } | null>(null);
+
+  // Chiudi il modal con ESC
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && enlargedImage) {
+        setEnlargedImage(null);
+      }
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [enlargedImage]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0] ?? null;
@@ -343,6 +358,25 @@ export const ImageSearchWidget: React.FC = () => {
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
+                      position: "relative",
+                      cursor: "pointer",
+                      transition: "transform 0.2s, box-shadow 0.2s",
+                    }}
+                    onClick={() => {
+                      if (r.properties?.image_b64) {
+                        setEnlargedImage({
+                          src: `data:image/png;base64,${r.properties.image_b64}`,
+                          alt: r.properties?.name || `Anteprima pagina ${r.properties?.page_index || ""}`,
+                        });
+                      }
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = "scale(1.02)";
+                      e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.15)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = "scale(1)";
+                      e.currentTarget.style.boxShadow = "none";
                     }}
                   >
                     <img
@@ -354,6 +388,7 @@ export const ImageSearchWidget: React.FC = () => {
                         display: "block",
                         maxHeight: "200px",
                         objectFit: "contain",
+                        pointerEvents: "none",
                       }}
                       onError={(e) => {
                         // Se l'immagine fallisce, nascondi il container
@@ -363,6 +398,26 @@ export const ImageSearchWidget: React.FC = () => {
                         }
                       }}
                     />
+                    {/* Icona zoom sovrapposta */}
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: "8px",
+                        right: "8px",
+                        backgroundColor: "rgba(0, 0, 0, 0.6)",
+                        borderRadius: "50%",
+                        width: "32px",
+                        height: "32px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        color: "white",
+                        fontSize: "16px",
+                        pointerEvents: "none",
+                      }}
+                    >
+                      🔍
+                    </div>
                   </div>
                 )}
                 
@@ -426,6 +481,75 @@ export const ImageSearchWidget: React.FC = () => {
           }}
         >
           Nessun progetto trovato.
+        </div>
+      )}
+
+      {/* Modal per immagine ingrandita */}
+      {enlargedImage && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.9)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 10000,
+            padding: "20px",
+            cursor: "pointer",
+          }}
+          onClick={() => setEnlargedImage(null)}
+        >
+          {/* Pulsante chiudi */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setEnlargedImage(null);
+            }}
+            style={{
+              position: "absolute",
+              top: "20px",
+              right: "20px",
+              backgroundColor: "rgba(255, 255, 255, 0.2)",
+              border: "none",
+              borderRadius: "50%",
+              width: "40px",
+              height: "40px",
+              color: "white",
+              fontSize: "24px",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              transition: "background-color 0.2s",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.3)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.2)";
+            }}
+            aria-label="Chiudi"
+          >
+            ×
+          </button>
+
+          {/* Immagine ingrandita */}
+          <img
+            src={enlargedImage.src}
+            alt={enlargedImage.alt}
+            style={{
+              maxWidth: "90%",
+              maxHeight: "90%",
+              objectFit: "contain",
+              borderRadius: "8px",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.5)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
         </div>
       )}
     </div>
