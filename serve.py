@@ -1752,46 +1752,46 @@ async def _list_tools() -> List[types.Tool]:
                 "readOnlyHint": True,
             }
 
-        # ✅ Schema specifico per hybrid_search con istruzioni incluse
-        elif name == "hybrid_search":
+        # ✅ Schema esplicito per hybrid_search: obbliga collection e query
+        if name == "hybrid_search":
             input_schema = {
                 "type": "object",
                 "properties": {
                     "collection": {
                         "type": "string",
-                        "description": "Nome della collection (sempre 'Sinde' per questo assistente)",
+                        "description": "Nome della collection Weaviate (di default 'Sinde').",
                     },
                     "query": {
                         "type": "string",
-                        "description": "Query di ricerca testuale",
+                        "description": "Testo della query da cercare.",
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Numero massimo di risultati da restituire",
+                        "description": "Numero massimo di risultati da restituire.",
                         "default": 10,
                     },
                     "alpha": {
                         "type": "number",
-                        "description": "Peso della ricerca vettoriale (0.0 = solo keyword, 1.0 = solo vettoriale)",
+                        "description": "Peso tra semantica e keyword (0-1).",
                         "default": 0.8,
                     },
                     "query_properties": {
-                        "type": "array",
+                        "type": ["array", "null"],
                         "items": {"type": "string"},
-                        "description": "Proprietà su cui cercare (default: ['caption', 'name'])",
-                    },
-                    "return_properties": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Proprietà da restituire (default: ['name', 'source_pdf', 'page_index', 'mediaType'])",
+                        "description": "Proprietà su cui fare la ricerca testuale (es. ['caption','name']).",
                     },
                     "image_id": {
-                        "type": "string",
-                        "description": "ID dell'immagine caricata tramite /upload-image",
+                        "type": ["string", "null"],
+                        "description": "ID immagine caricata (per ricerca ibrida testo+immagine).",
                     },
                     "image_url": {
-                        "type": "string",
-                        "description": "URL pubblico dell'immagine da usare per la ricerca",
+                        "type": ["string", "null"],
+                        "description": "URL di un'immagine (alternativa a image_id).",
+                    },
+                    "return_properties": {
+                        "type": ["array", "null"],
+                        "items": {"type": "string"},
+                        "description": "Lista di proprietà da restituire (es. ['name','source_pdf','page_index','mediaType']).",
                     },
                 },
                 "required": ["collection", "query"],
