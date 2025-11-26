@@ -20,24 +20,15 @@ type SearchResult = {
 declare global {
   interface Window {
     openai?: {
-      createClient?: () => {
-        tools: {
-          call(args: { name: string; arguments?: any }): Promise<any>;
-        };
-      } | null | undefined;
+      tools: {
+        call(args: { name: string; arguments?: any }): Promise<any>;
+      };
     };
   }
 }
 
-// 1) client SDK UNA VOLTA sola (inizializzato all'avvio)
-let client: any = null;
-try {
-  if (window.openai?.createClient) {
-    client = window.openai.createClient();
-  }
-} catch (e) {
-  console.warn("⚠️ window.openai.createClient non disponibile:", e);
-}
+// ❌ NIENTE createClient, niente client globale
+// (lo useremo direttamente dentro handleUploadAndSearch)
 
 export const ImageSearchWidget: React.FC = () => {
   const [file, setFile] = useState<File | null>(null);
@@ -128,26 +119,36 @@ export const ImageSearchWidget: React.FC = () => {
           : `Ho trovato ${results.length} risultati simili. I primi sono:\n` +
             summaryParts.join("\n");
 
-      // 5) CHIAMATA al tool sinde_widget_push_results
-      if (client) {
+      // 5️⃣ CHIAMATA al tool MCP sinde_widget_push_results tramite window.openai
+      const openaiClient = typeof window !== "undefined" ? window.openai : undefined;
+
+      if (openaiClient?.tools?.call) {
         try {
-          await client.tools.call({
+          await openaiClient.tools.call({
             name: "sinde_widget_push_results",
             arguments: {
               results_summary: resultsSummary,
-              raw_results: searchJson, // oppure results
+              raw_results: searchJson, // oppure solo `results`
             },
           });
+
           console.log("✅ Risultati inviati al modello tramite sinde_widget_push_results");
-          setStatus(`Ricerca completata. ${results.length} risultati trovati e inviati a ChatGPT.`);
+          setStatus(
+            `Ricerca completata. ${results.length} risultati trovati e inviati a ChatGPT.`
+          );
         } catch (err: any) {
           console.error("Errore chiamando sinde_widget_push_results:", err);
-          // NON bloccare la UI: al massimo mostri un warning
-          setStatus(`Ricerca completata. ${results.length} risultati trovati (errore invio a ChatGPT: ${err.message || "errore sconosciuto"})`);
+          setStatus(
+            `Ricerca completata. ${results.length} risultati trovati (errore invio a ChatGPT: ${
+              err?.message || "errore sconosciuto"
+            })`
+          );
         }
       } else {
-        console.warn("⚠️ Client OpenAI non disponibile, skip push risultati");
-        setStatus(`Ricerca completata. ${results.length} risultati trovati (non inviati a ChatGPT - API non disponibile)`);
+        console.warn("⚠️ window.openai non disponibile nel widget, skip push risultati");
+        setStatus(
+          `Ricerca completata. ${results.length} risultati trovati (non inviati a ChatGPT - integrazione non disponibile)`
+        );
       }
     } catch (err: any) {
       console.error(err);
@@ -218,3 +219,5 @@ export const ImageSearchWidget: React.FC = () => {
     </div>
   );
 };
+
+export {};
