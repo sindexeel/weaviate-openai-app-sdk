@@ -16,12 +16,13 @@ type SearchResult = {
   distance?: number;
 };
 
-// Declare global types per window.openai
 declare global {
   interface Window {
     openai?: {
-      tools: {
-        call(args: { name: string; arguments?: any }): Promise<any>;
+      tools?: {
+        // in alcuni ambienti è callTool, in altri call: gestiamo entrambe
+        callTool?: (args: { name: string; arguments?: any }) => Promise<any>;
+        call?: (args: { name: string; arguments?: any }) => Promise<any>;
       };
     };
   }
@@ -119,35 +120,40 @@ export const ImageSearchWidget: React.FC = () => {
           : `Ho trovato ${results.length} risultati simili. I primi sono:\n` +
             summaryParts.join("\n");
 
-      // 5️⃣ CHIAMATA al tool MCP sinde_widget_push_results tramite window.openai
-      const openaiClient = typeof window !== "undefined" ? window.openai : undefined;
+      // 5️⃣ PUSH risultati a ChatGPT tramite MCP tool sinde_widget_push_results
+      try {
+        const openaiClient = (window as any).openai;
+        const tools = openaiClient?.tools;
 
-      if (openaiClient?.tools?.call) {
-        try {
-          await openaiClient.tools.call({
+        // Prova prima callTool, poi call
+        const callFn =
+          (tools && (tools as any).callTool) ||
+          (tools && (tools as any).call);
+
+        if (typeof callFn === "function") {
+          await callFn({
             name: "sinde_widget_push_results",
             arguments: {
               results_summary: resultsSummary,
-              raw_results: searchJson, // oppure solo `results`
+              raw_results: searchJson, // puoi mettere anche solo "results"
             },
           });
-
-          console.log("✅ Risultati inviati al modello tramite sinde_widget_push_results");
+          console.log("✅ Risultati inviati al modello via sinde_widget_push_results");
           setStatus(
             `Ricerca completata. ${results.length} risultati trovati e inviati a ChatGPT.`
           );
-        } catch (err: any) {
-          console.error("Errore chiamando sinde_widget_push_results:", err);
+        } else {
+          console.warn("⚠️ window.openai.tools.call(Tool) non disponibile");
           setStatus(
-            `Ricerca completata. ${results.length} risultati trovati (errore invio a ChatGPT: ${
-              err?.message || "errore sconosciuto"
-            })`
+            `Ricerca completata. ${results.length} risultati trovati (non inviati a ChatGPT - integrazione non disponibile)`
           );
         }
-      } else {
-        console.warn("⚠️ window.openai non disponibile nel widget, skip push risultati");
+      } catch (err: any) {
+        console.error("Errore chiamando sinde_widget_push_results:", err);
         setStatus(
-          `Ricerca completata. ${results.length} risultati trovati (non inviati a ChatGPT - integrazione non disponibile)`
+          `Ricerca completata. ${results.length} risultati trovati (errore invio a ChatGPT: ${
+            err?.message || "errore sconosciuto"
+          })`
         );
       }
     } catch (err: any) {
