@@ -125,7 +125,7 @@ export const ImageSearchWidget: React.FC = () => {
         } else {
           console.log("✅ Risultati salvati lato server per ChatGPT");
           setStatus(
-            `Ricerca completata. ${results.length} progetti trovati e salvati per ChatGPT.`
+            `Ricerca completata. ${results.length} progetti trovati.`
           );
         }
       } catch (err: any) {

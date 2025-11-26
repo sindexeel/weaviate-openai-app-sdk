@@ -1572,6 +1572,7 @@ _HIDDEN_TOOLS: set[str] = {
     "debug_widget",
     "upload_image",
     "semantic_search",
+    "keyword_search",
     "insert_image_vertex",
     "image_search_vertex",
     "diagnose_vertex",
@@ -1750,6 +1751,60 @@ async def _list_tools() -> List[types.Tool]:
                 "openWorldHint": False,
                 "readOnlyHint": True,
             }
+
+        # ✅ Schema specifico per hybrid_search con istruzioni incluse
+        elif name == "hybrid_search":
+            input_schema = {
+                "type": "object",
+                "properties": {
+                    "collection": {
+                        "type": "string",
+                        "description": "Nome della collection (sempre 'Sinde' per questo assistente)",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Query di ricerca testuale",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Numero massimo di risultati da restituire",
+                        "default": 10,
+                    },
+                    "alpha": {
+                        "type": "number",
+                        "description": "Peso della ricerca vettoriale (0.0 = solo keyword, 1.0 = solo vettoriale)",
+                        "default": 0.8,
+                    },
+                    "query_properties": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Proprietà su cui cercare (default: ['caption', 'name'])",
+                    },
+                    "return_properties": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Proprietà da restituire (default: ['name', 'source_pdf', 'page_index', 'mediaType'])",
+                    },
+                    "image_id": {
+                        "type": "string",
+                        "description": "ID dell'immagine caricata tramite /upload-image",
+                    },
+                    "image_url": {
+                        "type": "string",
+                        "description": "URL pubblico dell'immagine da usare per la ricerca",
+                    },
+                },
+                "required": ["collection", "query"],
+                "additionalProperties": False,
+            }
+            tool_title = "Ricerca ibrida (BM25 + vettoriale)"
+            tool_description = (
+                "Esegue una ricerca ibrida combinando ricerca keyword (BM25) e ricerca vettoriale. "
+                "Tool principale per cercare nella collection Sinde.\n\n"
+                "ISTRUZIONI: Usa SEMPRE collection='Sinde'. Usa query_properties=['caption','name'] e "
+                "return_properties=['name','source_pdf','page_index','mediaType']. Mantieni alpha=0.8 e limit=10 "
+                "salvo richieste diverse. Per ricerche per immagini, usa image_id (da /upload-image) o image_url."
+            )
 
         tools.append(
             types.Tool(
