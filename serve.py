@@ -981,6 +981,26 @@ def sinde_widget_push_results(
 
 
 @mcp.tool()
+def get_last_sinde_results() -> Dict[str, Any]:
+    """
+    Restituisce gli ultimi risultati che il widget Sinde ha salvato tramite /widget-push-results.
+    
+    - Nessun argomento richiesto.
+    - Se non ci sono risultati, restituisce summary/raw_results = None.
+    """
+    if not _LAST_WIDGET_RESULTS:
+        return {
+            "summary": None,
+            "raw_results": None,
+        }
+
+    return {
+        "summary": _LAST_WIDGET_RESULTS.get("summary"),
+        "raw_results": _LAST_WIDGET_RESULTS.get("raw_results"),
+    }
+
+
+@mcp.tool()
 def check_connection() -> Dict[str, Any]:
     client = _connect()
     try:
@@ -1542,7 +1562,9 @@ TOOL_REGISTRY: Dict[str, Any] = {
     "insert_image_vertex": insert_image_vertex,
     "image_search_vertex": image_search_vertex,  # Nota: questa non ha @mcp.tool() ma è una funzione normale
     "diagnose_vertex": diagnose_vertex,
-    "sinde_widget_push_results": sinde_widget_push_results,
+    "get_last_sinde_results": get_last_sinde_results,
+    # (opzionale) tieni ancora l'helper interno, ma NON serve come tool:
+    # "sinde_widget_push_results": sinde_widget_push_results,
 }
 
 
@@ -1688,35 +1710,41 @@ async def _list_tools() -> List[types.Tool]:
             "additionalProperties": True,
         }
 
-        # Schema più preciso per il tool usato dal widget
-        if name == "sinde_widget_push_results":
+        tool_title = name
+        tool_description = name
+        annotations = {
+            "destructiveHint": False,
+            "openWorldHint": True,
+            "readOnlyHint": False,
+        }
+
+        # ✅ Tool speciale per recuperare i risultati dal widget Sinde
+        if name == "get_last_sinde_results":
             input_schema = {
                 "type": "object",
-                "properties": {
-                    "results_summary": {
-                        "type": "string",
-                        "description": "Riassunto breve dei risultati mostrati nel widget.",
-                    },
-                    "raw_results": {
-                        "type": "object",
-                        "description": "Risultati grezzi (lista di match, metadati, ecc.).",
-                    },
-                },
-                "required": [],  # <<< nessun campo obbligatorio
+                "properties": {},
+                "required": [],               # nessun argomento richiesto
                 "additionalProperties": False,
+            }
+            tool_title = "Risultati ricerca immagini Sinde"
+            tool_description = (
+                "Recupera gli ultimi risultati della ricerca immagini mostrati nel widget Sinde. "
+                "Usalo automaticamente quando l'utente parla dei 'risultati del widget', "
+                "'primo risultato', 'secondo risultato', 'riassumi i risultati della ricerca immagini', ecc."
+            )
+            annotations = {
+                "destructiveHint": False,
+                "openWorldHint": False,
+                "readOnlyHint": True,
             }
 
         tools.append(
             types.Tool(
                 name=name,
-                title=name,
-                description=name,
+                title=tool_title,
+                description=tool_description,
                 inputSchema=input_schema,
-                annotations={
-                    "destructiveHint": False,
-                    "openWorldHint": True,
-                    "readOnlyHint": False,
-                },
+                annotations=annotations,
             )
         )
 
@@ -1806,8 +1834,8 @@ async def _call_tool_request(req: types.CallToolRequest) -> types.ServerResult:
     if name in TOOL_REGISTRY:
         fn = TOOL_REGISTRY[name]
         
-        if name == "sinde_widget_push_results":
-            print("[call_tool] sinde_widget_push_results invoked from widget")
+        if name == "get_last_sinde_results":
+            print("[call_tool] get_last_sinde_results invoked")
         
         try:
             # Proviamo a passare gli argomenti così come sono
@@ -1847,9 +1875,9 @@ async def _call_tool_request(req: types.CallToolRequest) -> types.ServerResult:
             )
 
         # Testo diverso se è il tool del widget
-        if name == "sinde_widget_push_results":
+        if name == "get_last_sinde_results":
             text_msg = (
-                "Ho ricevuto i risultati dal widget Sinde. "
+                "Ho recuperato i risultati dal widget Sinde. "
                 "Trovi il riassunto e i dati in structuredContent.summary e structuredContent.raw_results."
             )
         else:
