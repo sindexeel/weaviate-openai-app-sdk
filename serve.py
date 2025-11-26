@@ -1905,15 +1905,18 @@ async def _call_tool_request(req: types.CallToolRequest) -> types.ServerResult:
         if name == "get_last_sinde_results":
             print("[call_tool] get_last_sinde_results invoked")
 
-        # Caso speciale: hybrid_search → normalizziamo i parametri a mano
+        # Caso speciale: hybrid_search → ripuliamo gli argomenti (niente return_properties)
         if name == "hybrid_search":
             print("[call_tool] hybrid_search called with:", args)
 
-            collection = args.get("collection") or "Sinde"
-            query = args.get("query")
+            clean_args: Dict[str, Any] = {}
 
-            if not query:
-                # Niente eccezione Python: rispondiamo con errore MCP "gentile"
+            # collection con default "Sinde"
+            clean_args["collection"] = args.get("collection") or "Sinde"
+
+            # query obbligatoria
+            q = args.get("query")
+            if not q:
                 return types.ServerResult(
                     types.CallToolResult(
                         content=[
@@ -1925,54 +1928,24 @@ async def _call_tool_request(req: types.CallToolRequest) -> types.ServerResult:
                         isError=True,
                     )
                 )
+            clean_args["query"] = q
 
-            limit = args.get("limit", 10)
-            alpha = args.get("alpha", 0.8)
-            query_properties = args.get("query_properties")
-            return_properties = args.get("return_properties")
-            image_id = args.get("image_id")
-            image_url = args.get("image_url")
+            # parametri opzionali
+            if "limit" in args:
+                clean_args["limit"] = args["limit"]
+            if "alpha" in args:
+                clean_args["alpha"] = args["alpha"]
+            if "query_properties" in args:
+                clean_args["query_properties"] = args["query_properties"]
+            if "image_id" in args:
+                clean_args["image_id"] = args["image_id"]
+            if "image_url" in args:
+                clean_args["image_url"] = args["image_url"]
 
-            try:
-                result = fn(
-                    collection=collection,
-                    query=query,
-                    limit=limit,
-                    alpha=alpha,
-                    query_properties=query_properties,
-                    return_properties=return_properties,
-                    image_id=image_id,
-                    image_url=image_url,
-                )
-                # Se la funzione fosse async (non lo è, ma per sicurezza)
-                if hasattr(result, "__await__"):
-                    result = await result
-            except Exception as e:
-                return types.ServerResult(
-                    types.CallToolResult(
-                        content=[
-                            types.TextContent(
-                                type="text",
-                                text=f"Errore chiamando hybrid_search: {e}",
-                            )
-                        ],
-                        isError=True,
-                    )
-                )
-
-            return types.ServerResult(
-                types.CallToolResult(
-                    content=[
-                        types.TextContent(
-                            type="text",
-                            text="Risultato del tool hybrid_search disponibile in structuredContent.",
-                        )
-                    ],
-                    structuredContent=(
-                        result if isinstance(result, dict) else {"result": result}
-                    ),
-                )
-            )
+            # 🔴 QUI LA COSA IMPORTANTE:
+            # sovrascriviamo args con la versione ripulita
+            # (così return_properties e qualsiasi altro extra SPARISCONO)
+            args = clean_args
 
         # Tutti gli altri tool normali rimangono come prima
         try:
