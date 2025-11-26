@@ -19,18 +19,25 @@ type SearchResult = {
 // Declare global types per window.openai
 declare global {
   interface Window {
-    openai: {
-      createClient: () => {
+    openai?: {
+      createClient?: () => {
         tools: {
           call(args: { name: string; arguments?: any }): Promise<any>;
         };
-      };
+      } | null | undefined;
     };
   }
 }
 
 // 1) client SDK UNA VOLTA sola (inizializzato all'avvio)
-const client = window.openai?.createClient();
+let client: any = null;
+try {
+  if (window.openai?.createClient) {
+    client = window.openai.createClient();
+  }
+} catch (e) {
+  console.warn("⚠️ window.openai.createClient non disponibile:", e);
+}
 
 export const ImageSearchWidget: React.FC = () => {
   const [file, setFile] = useState<File | null>(null);
