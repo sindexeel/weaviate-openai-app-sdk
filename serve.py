@@ -1567,6 +1567,16 @@ TOOL_REGISTRY: Dict[str, Any] = {
     # "sinde_widget_push_results": sinde_widget_push_results,
 }
 
+# Tool nascosti (non esposti all'LLM ma ancora disponibili internamente)
+_HIDDEN_TOOLS: set[str] = {
+    "debug_widget",
+    "upload_image",
+    "semantic_search",
+    "insert_image_vertex",
+    "image_search_vertex",
+    "diagnose_vertex",
+}
+
 
 # ==== Vertex OAuth Token Refresher (optional) ===============================
 def _write_adc_from_json_env():
@@ -1700,8 +1710,11 @@ async def _list_tools() -> List[types.Tool]:
         )
     )
 
-    # 2) Tutti gli altri tool normali
+    # 2) Tutti gli altri tool normali (escludendo quelli nascosti)
     for name in TOOL_REGISTRY.keys():
+        # Salta i tool nascosti
+        if name in _HIDDEN_TOOLS:
+            continue
         # Schema di default: argomenti liberi
         input_schema: Dict[str, Any] = {
             "type": "object",
