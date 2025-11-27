@@ -830,15 +830,18 @@ async def upload_image_endpoint(request):
 @mcp.custom_route("/image-search", methods=["POST"])
 async def image_search_http(request):
     """
-    Endpoint HTTP per effettuare la ricerca immagini usando image_search_vertex.
+    Endpoint HTTP per effettuare la ricerca immagini usando hybrid_search.
     Si aspetta un JSON tipo:
       {
         "collection": "Sinde",
         "image_id": "uuid from /upload-image",
         "image_url": "... (opzionale)",
-        "caption": "... (opzionale)",
+        "caption": "... (opzionale, non più usato)",
         "limit": 10
       }
+    
+    Usa hybrid_search che genera il vettore esternamente con Vertex AI + GPT,
+    invece di image_search_vertex che richiede un vectorizer interno di Weaviate.
     """
     try:
         data = await request.json()
@@ -848,7 +851,6 @@ async def image_search_http(request):
     collection = data.get("collection") or "Sinde"
     image_id = data.get("image_id")
     image_url = data.get("image_url")
-    caption = data.get("caption")
     limit = data.get("limit") or 10
 
     if not image_id and not image_url:
@@ -858,13 +860,16 @@ async def image_search_http(request):
         )
 
     try:
-        # Riusa la logica già esistente del tool MCP
-        result = image_search_vertex(
+        # Usa hybrid_search invece di image_search_vertex
+        # hybrid_search genera il vettore esternamente con Vertex AI + GPT
+        result = hybrid_search(
             collection=collection,
+            query="",  # niente testo utente, è una pura ricerca per immagine
+            limit=limit,
+            alpha=0.5,  # bilancia tra BM25 e vettoriale (0.5 = 50% testo, 50% vettore)
+            query_properties=["caption", "name"],
             image_id=image_id,
             image_url=image_url,
-            caption=caption,
-            limit=limit,
         )
         return JSONResponse(result)
     except Exception as e:
