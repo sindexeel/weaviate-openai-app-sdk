@@ -414,6 +414,11 @@ def _update_client_grpc_metadata(client):
     try:
         grpc_meta: Dict[str, str] = {}
         
+        # Assicuriamoci che _VERTEX_HEADERS contenga il token più recente
+        if not ("_VERTEX_HEADERS" in globals() and _VERTEX_HEADERS and _VERTEX_HEADERS.get("X-Goog-Vertex-Api-Key")):
+            # Se _VERTEX_HEADERS è vuoto o non contiene il token, facciamo un refresh
+            _sync_refresh_vertex_token()
+        
         # Aggiungiamo i metadata Vertex se disponibili
         if "_VERTEX_HEADERS" in globals() and _VERTEX_HEADERS:
             vertex_token = _VERTEX_HEADERS.get("X-Goog-Vertex-Api-Key") or _VERTEX_HEADERS.get("x-goog-vertex-api-key")
@@ -450,6 +455,25 @@ def _update_client_grpc_metadata(client):
                     conn.set_grpc_metadata(meta_list)
                 except Exception:
                     pass
+            
+            # Prova anche ad aggiornare gli header REST se possibile
+            try:
+                vertex_token = None
+                if "_VERTEX_HEADERS" in globals() and _VERTEX_HEADERS:
+                    vertex_token = _VERTEX_HEADERS.get("X-Goog-Vertex-Api-Key") or _VERTEX_HEADERS.get("x-goog-vertex-api-key")
+                
+                if vertex_token:
+                    # Prova vari attributi possibili per gli header REST
+                    for attr_name in ["_headers", "headers", "_rest_headers", "rest_headers"]:
+                        if hasattr(conn, attr_name):
+                            headers_attr = getattr(conn, attr_name)
+                            if headers_attr is not None and isinstance(headers_attr, dict):
+                                headers_attr["X-Goog-Vertex-Api-Key"] = vertex_token
+                                if _VERTEX_USER_PROJECT:
+                                    headers_attr["X-Goog-User-Project"] = _VERTEX_USER_PROJECT
+                                break
+            except Exception:
+                pass
     except Exception as e:
         print(f"[vertex-oauth] warning: cannot update gRPC metadata: {e}")
 
