@@ -368,7 +368,13 @@ def _connect():
         ]:
             grpc_meta.setdefault(kk, vertex_key)
     else:
-        if "authorization" not in grpc_meta and "_VERTEX_HEADERS" in globals() and _VERTEX_HEADERS:
+        # Quando usiamo OAuth, assicuriamoci che x-goog-vertex-api-key sia nei metadata gRPC
+        if "_VERTEX_HEADERS" in globals() and _VERTEX_HEADERS:
+            vertex_token = _VERTEX_HEADERS.get("X-Goog-Vertex-Api-Key") or _VERTEX_HEADERS.get("x-goog-vertex-api-key")
+            if vertex_token and "x-goog-vertex-api-key" not in grpc_meta:
+                grpc_meta["x-goog-vertex-api-key"] = vertex_token
+            if _VERTEX_USER_PROJECT and "x-goog-user-project" not in grpc_meta:
+                grpc_meta["x-goog-user-project"] = _VERTEX_USER_PROJECT
             auth = _VERTEX_HEADERS.get("Authorization") or _VERTEX_HEADERS.get(
                 "authorization"
             )
