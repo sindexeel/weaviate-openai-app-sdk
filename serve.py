@@ -1262,6 +1262,9 @@ def hybrid_search(
         if image_b64:
             # 1️⃣ generiamo una descrizione testuale ad hoc per la query
             query_caption = describe_image_for_query(image_b64)
+            # DEBUG: log completo della query per confronto con Colab
+            print(f"[DEBUG] query_caption FULL: {repr(query_caption)}")
+            print(f"[DEBUG] query_caption length: {len(query_caption) if query_caption else 0}")
             if query_caption:
                 print(f"[hybrid_search] query_caption (len={len(query_caption)}): {query_caption[:120]}...")
             else:
@@ -1280,6 +1283,9 @@ def hybrid_search(
             }
             # Quando c'è un'immagine, limita BM25 a caption e name come nel Colab
             hybrid_params["query_properties"] = ["caption", "name"]
+            
+            # DEBUG: log dei parametri prima della chiamata
+            print(f"[DEBUG] hybrid_params: query={repr(hybrid_params['query'])}, alpha={hybrid_params['alpha']}, limit={hybrid_params['limit']}, query_properties={hybrid_params['query_properties']}")
 
             resp = coll.query.hybrid(**hybrid_params)
         else:
