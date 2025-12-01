@@ -1461,7 +1461,18 @@ def describe_image_for_query(image_b64: str) -> Optional[str]:
     try:
         resp = _OPENAI_CLIENT.chat.completions.create(
             model="gpt-4o-mini",
+            temperature=0,
+            max_tokens=350,
             messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Sei un esperto di disegno meccanico. "
+                        "Riceverai immagini di tavole tecniche con pezzi meccanici. "
+                        "Devi descrivere solo la geometria del pezzo (forme, fori, spessori, simmetrie), "
+                        "ignorando completamente testi, quote, misure e intestazioni."
+                    ),
+                },
                 {
                     "role": "user",
                     "content": [
@@ -1469,11 +1480,10 @@ def describe_image_for_query(image_b64: str) -> Optional[str]:
                             "type": "text",
                             "text": (
                                 "Descrivi in modo conciso ma tecnico la forma del pezzo meccanico mostrato. "
-                                "Ignora completamente numeri, quote, cartigli e testi. "
-                                "Concentrati solo sulla geometria: tipo di pezzo (ingranaggio, flangia, albero, pignone, ecc.), "
-                                "fori, gole, spallamenti, denti, cave, smussi, raggi, ecc. "
-                                "Se vedi più viste 2D (frontale, laterale, sezione), usale mentalmente per ricostruire la forma 3D. "
-                                "Massimo 4 frasi, non più di 800 caratteri."
+                                "Ignora testo, numeri, quote, cartigli e tutto ciò che non è geometria. "
+                                "Se vedi più viste (frontale, laterale, sezione), usale per ricostruire mentalmente "
+                                "la forma 3D del pezzo.\n\n"
+                                "Rispondi in al massimo 4 frasi, per un totale di non più di 900 caratteri."
                             ),
                         },
                         {
@@ -1483,14 +1493,13 @@ def describe_image_for_query(image_b64: str) -> Optional[str]:
                             },
                         },
                     ],
-                }
+                },
             ],
-            max_tokens=256,
         )
 
         caption = resp.choices[0].message.content.strip()
 
-        MAX_CAPTION_CHARS = 900  # sotto al limite Vertex 1024
+        MAX_CAPTION_CHARS = 1024
         if len(caption) > MAX_CAPTION_CHARS:
             caption = caption[:MAX_CAPTION_CHARS]
 
@@ -1498,7 +1507,7 @@ def describe_image_for_query(image_b64: str) -> Optional[str]:
 
     except Exception as e:
         print(f"[query-caption] errore nella descrizione immagine: {e}")
-        return None
+        return ""
 
 
 @mcp.tool()
