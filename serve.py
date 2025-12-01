@@ -293,65 +293,38 @@ def _connect():
     _resolve_service_account_path()
 
     headers: Dict[str, str] = {}
+    
+    # OpenAI (se ti serve per text2vec-openai / altre cose)
     openai_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENAI_APIKEY")
     if openai_key:
         headers["X-OpenAI-Api-Key"] = openai_key
 
-    vertex_key = os.environ.get("VERTEX_APIKEY")
-    vertex_bearer = os.environ.get("VERTEX_BEARER_TOKEN")
-
-    if vertex_bearer:
-        headers.update(_build_vertex_header_map(vertex_bearer))
-        print("[vertex-oauth] using bearer token from VERTEX_BEARER_TOKEN env")
-
-    if vertex_key and not headers:
-        for k in [
-            "X-Goog-Vertex-Api-Key",
-            "X-Goog-Api-Key",
-            "X-Palm-Api-Key",
-            "X-Goog-Studio-Api-Key",
-        ]:
-            headers[k] = vertex_key
-        print("[vertex-oauth] using static Vertex API key from VERTEX_APIKEY")
-
-    # Assicuriamoci che _VERTEX_HEADERS contenga sempre il token più recente
-    if not headers:
-        # Se _VERTEX_HEADERS è vuoto o non contiene il token, facciamo un refresh
+    # 👇 QUI la parte importante: esattamente come fai in Colab
+    # Prendi il token OAuth Vertex da _VERTEX_HEADERS (aggiornato dal refresh)
+    vertex_token = (
+        os.environ.get("VERTEX_APIKEY")
+        or os.environ.get("VERTEX_BEARER_TOKEN")
+    )
+    
+    # Se non c'è una chiave statica/bearer, usa OAuth
+    if not vertex_token:
+        # Assicurati che _VERTEX_HEADERS contenga il token
         if not ("_VERTEX_HEADERS" in globals() and _VERTEX_HEADERS and _VERTEX_HEADERS.get("X-Goog-Vertex-Api-Key")):
-            if _sync_refresh_vertex_token():
-                headers.update(_VERTEX_HEADERS)
-            else:
-                print("[vertex-oauth] unable to obtain Vertex token synchronously")
-        elif "_VERTEX_HEADERS" in globals() and _VERTEX_HEADERS:
-            headers.update(_VERTEX_HEADERS)
-    else:
-        # Anche se abbiamo altri header, assicuriamoci che _VERTEX_HEADERS contenga il token
-        # per i metadata gRPC
-        if not ("_VERTEX_HEADERS" in globals() and _VERTEX_HEADERS and _VERTEX_HEADERS.get("X-Goog-Vertex-Api-Key")):
-            if _sync_refresh_vertex_token():
-                # Aggiungiamo anche agli header se non c'è già
-                if "X-Goog-Vertex-Api-Key" not in headers:
-                    headers.update(_VERTEX_HEADERS)
-
-    vertex_token = headers.get("X-Goog-Vertex-Api-Key")
+            # Se _VERTEX_HEADERS è vuoto o non contiene il token, facciamo un refresh
+            _sync_refresh_vertex_token()
+        # Prendi il token da _VERTEX_HEADERS
+        if "_VERTEX_HEADERS" in globals() and _VERTEX_HEADERS:
+            vertex_token = _VERTEX_HEADERS.get("X-Goog-Vertex-Api-Key")
+    
     if vertex_token:
-        # Aggiorna anche le variabili d'ambiente per Weaviate vectorizer
+        # Esattamente come nel Colab: metti il token nell'header
+        headers["X-Goog-Vertex-Api-Key"] = vertex_token
+        # Aggiorna anche le variabili d'ambiente per Weaviate vectorizer (fallback)
         os.environ["GOOGLE_APIKEY"] = vertex_token
         os.environ["PALM_APIKEY"] = vertex_token
-        token_preview = vertex_token[:10]
-        project_debug = headers.get("X-Goog-User-Project")
-        if project_debug:
-            print(
-                f"[vertex-oauth] using Vertex header token prefix: {token_preview}... project: {project_debug}"
-            )
-        else:
-            print(
-                f"[vertex-oauth] using Vertex header token prefix: {token_preview}... (no x-goog-user-project)"
-            )
-    elif headers:
-        print("[vertex-oauth] custom headers configured (non-Vertex)")
+        print(f"[vertex-oauth] using Vertex token (prefix: {vertex_token[:10]}...)")
     else:
-        print("[vertex-oauth] WARNING: no Vertex headers available for connection")
+        print("[vertex-oauth] WARNING: no Vertex token available for connection")
 
     client = weaviate.connect_to_weaviate_cloud(
         cluster_url=url,
@@ -359,35 +332,12 @@ def _connect():
         headers=headers or None,
     )
 
+    # Imposta anche i metadata gRPC (necessari per Weaviate)
     grpc_meta: Dict[str, str] = {}
-    for k, v in (headers or {}).items():
-        kk = k.lower()
-        if kk not in {"x-goog-vertex-api-key", "x-goog-user-project"}:
-            continue
-        grpc_meta[kk] = v
-
-    if vertex_key:
-        for kk in [
-            "x-goog-vertex-api-key",
-            "x-goog-api-key",
-            "x-palm-api-key",
-            "x-goog-studio-api-key",
-        ]:
-            grpc_meta.setdefault(kk, vertex_key)
-    else:
-        # Quando usiamo OAuth, assicuriamoci che x-goog-vertex-api-key sia nei metadata gRPC
-        if "_VERTEX_HEADERS" in globals() and _VERTEX_HEADERS:
-            vertex_token = _VERTEX_HEADERS.get("X-Goog-Vertex-Api-Key") or _VERTEX_HEADERS.get("x-goog-vertex-api-key")
-            if vertex_token and "x-goog-vertex-api-key" not in grpc_meta:
-                grpc_meta["x-goog-vertex-api-key"] = vertex_token
-            if _VERTEX_USER_PROJECT and "x-goog-user-project" not in grpc_meta:
-                grpc_meta["x-goog-user-project"] = _VERTEX_USER_PROJECT
-            auth = _VERTEX_HEADERS.get("Authorization") or _VERTEX_HEADERS.get(
-                "authorization"
-            )
-            if auth:
-                grpc_meta["authorization"] = auth
-
+    if vertex_token:
+        grpc_meta["x-goog-vertex-api-key"] = vertex_token
+        if _VERTEX_USER_PROJECT:
+            grpc_meta["x-goog-user-project"] = _VERTEX_USER_PROJECT
     if openai_key:
         grpc_meta["x-openai-api-key"] = openai_key
 
