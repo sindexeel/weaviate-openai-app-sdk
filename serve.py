@@ -335,6 +335,9 @@ def _connect():
 
     vertex_token = headers.get("X-Goog-Vertex-Api-Key")
     if vertex_token:
+        # Aggiorna anche le variabili d'ambiente per Weaviate vectorizer
+        os.environ["GOOGLE_APIKEY"] = vertex_token
+        os.environ["PALM_APIKEY"] = vertex_token
         token_preview = vertex_token[:10]
         project_debug = headers.get("X-Goog-User-Project")
         if project_debug:
