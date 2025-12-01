@@ -1169,7 +1169,7 @@ def hybrid_search(
     collection: str,
     query: str,
     limit: int = 10,
-    alpha: float = 0.8,
+    alpha: float = 0.2,
     query_properties: Optional[Any] = None,
     image_id: Optional[str] = None,
     image_url: Optional[str] = None,
@@ -1229,19 +1229,14 @@ def hybrid_search(
             else:
                 print("[hybrid_search] nessuna query_caption generata, uso solo immagine")
 
-            # 2️⃣ vettore Vertex con immagine + testo descrittivo
-            vec = _vertex_embed(
-                image_b64=image_b64,
-                text=query_caption  # NOTA: qui usiamo la descrizione GPT, non la query utente
-            )
-
-            # 3️⃣ hybrid query: BM25 usa eventuale query testuale dell'utente,
-            #     il vettore usa immagine + descrizione
+            # 2️⃣ usiamo SOLO la descrizione GPT come query testuale
+            #    ignoriamo completamente la query utente quando c'è un'immagine
+            #    Weaviate genererà automaticamente il vettore dalla query se ha un vectorizer configurato
             hybrid_params: Dict[str, Any] = {
-                "query": query if query else "",
+                "query": query_caption if query_caption else "",  # SOLO descrizione GPT, ignora query utente
                 "alpha": alpha,
                 "limit": limit,
-                "vector": vec,
+                # NON passiamo più "vector": il vettore verrà generato automaticamente da Weaviate dalla query
                 "return_properties": ["name", "source_pdf", "page_index", "mediaType", "image_b64"],
                 "return_metadata": MetadataQuery(score=True, distance=True),
             }
