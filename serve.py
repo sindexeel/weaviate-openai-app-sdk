@@ -1059,6 +1059,7 @@ def get_config() -> Dict[str, Any]:
         "weaviate_url": os.environ.get("WEAVIATE_CLUSTER_URL")
         or os.environ.get("WEAVIATE_URL"),
         "weaviate_api_key_set": bool(os.environ.get("WEAVIATE_API_KEY")),
+        "default_collection": _get_default_collection(),
         "openai_api_key_set": bool(
             os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENAI_APIKEY")
         ),
