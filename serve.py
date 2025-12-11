@@ -285,6 +285,20 @@ def _get_default_collection() -> str:
     return os.environ.get("WEAVIATE_DEFAULT_COLLECTION", "Sinde")
 
 
+def _get_default_alpha() -> float:
+    """
+    Restituisce l'alpha di default per hybrid_search.
+    Se HYBRID_DEFAULT_ALPHA è impostata (env), usa quella; altrimenti 0.2.
+    """
+    val = os.environ.get("HYBRID_DEFAULT_ALPHA")
+    if not val:
+        return 0.2
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return 0.2
+
+
 def _resolve_service_account_path() -> Optional[str]:
     gac_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if gac_path and os.path.exists(gac_path):
@@ -1060,6 +1074,8 @@ def get_config() -> Dict[str, Any]:
         or os.environ.get("WEAVIATE_URL"),
         "weaviate_api_key_set": bool(os.environ.get("WEAVIATE_API_KEY")),
         "default_collection": _get_default_collection(),
+        "default_alpha": _get_default_alpha(),
+        "prompt_file": _MCP_INSTRUCTIONS_FILE,
         "openai_api_key_set": bool(
             os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENAI_APIKEY")
         ),
@@ -1286,11 +1302,15 @@ def hybrid_search(
     collection: str,
     query: str,
     limit: int = 10,
-    alpha: float = 0.2,
+    alpha: Optional[float] = None,
     query_properties: Optional[Any] = None,
     image_id: Optional[str] = None,
     image_url: Optional[str] = None,
 ) -> Dict[str, Any]:
+    # Se alpha non è specificato, usa il default da env (HYBRID_DEFAULT_ALPHA) o 0.2
+    if alpha is None:
+        alpha = _get_default_alpha()
+
     # Usa la collection di default configurata, mantenendo lo stesso comportamento di forzatura
     default_collection = _get_default_collection()
     if not collection:
@@ -2002,8 +2022,8 @@ async def _list_tools() -> List[types.Tool]:
                     },
                     "alpha": {
                         "type": "number",
-                        "description": "Peso della ricerca vettoriale (0.0 = solo keyword, 1.0 = solo vettoriale)",
-                        "default": 0.8,
+                        "description": "Peso della ricerca vettoriale (0.0 = solo keyword, 1.0 = solo vettoriale). Default configurabile con HYBRID_DEFAULT_ALPHA (default 0.2).",
+                        "default": _get_default_alpha(),
                     },
                     "query_properties": {
                         "type": "array",
