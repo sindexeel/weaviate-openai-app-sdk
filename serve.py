@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 from functools import lru_cache
+from urllib.parse import urlparse
 import mcp.types as types
 
 # Monkey-patch uvicorn.run() PRIMA che FastMCP lo importi
@@ -145,7 +146,12 @@ _BASE_DIR = Path(__file__).resolve().parent
 _DEFAULT_PROMPT_PATH = _BASE_DIR / "prompts" / "instructions.md"
 _DEFAULT_DESCRIPTION_PATH = _BASE_DIR / "prompts" / "description.txt"
 _WIDGET_DIST_DIR = _BASE_DIR / "weaviate-image-app" / "dist"
-_BASE_URL = os.environ.get("BASE_URL", "https://weaviate-openai-app-sdk.onrender.com")
+_BASE_URL = (
+    os.environ.get("PUBLIC_URL")
+    or os.environ.get("BASE_URL")
+    or "https://weaviate-openai-app-sdk.onrender.com"
+)
+_BASE_HOST = urlparse(_BASE_URL).netloc
 
 
 def _build_vertex_header_map(token: str) -> Dict[str, str]:
@@ -203,6 +209,14 @@ def _get_weaviate_api_key() -> str:
     if not api_key:
         raise RuntimeError("Please set WEAVIATE_API_KEY.")
     return api_key
+
+
+def _get_default_collection() -> str:
+    """
+    Restituisce il nome della collection di default.
+    Se WEAVIATE_DEFAULT_COLLECTION è impostata, usa quella; altrimenti 'Sinde'.
+    """
+    return os.environ.get("WEAVIATE_DEFAULT_COLLECTION", "Sinde")
 
 
 def _resolve_service_account_path() -> Optional[str]:
@@ -883,7 +897,8 @@ async def image_search_http(request):
     except Exception:
         return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
 
-    collection = data.get("collection") or "Sinde"
+    # Usa la collection passata o il default da WEAVIATE_DEFAULT_COLLECTION (fallback 'Sinde')
+    collection = data.get("collection") or _get_default_collection()
     image_id = data.get("image_id")
     image_url = data.get("image_url")
     limit = data.get("limit") or 10
@@ -1209,11 +1224,16 @@ def hybrid_search(
     image_id: Optional[str] = None,
     image_url: Optional[str] = None,
 ) -> Dict[str, Any]:
-    if collection and collection != "Sinde":
+    # Usa la collection di default configurata, mantenendo lo stesso comportamento di forzatura
+    default_collection = _get_default_collection()
+    if not collection:
+        collection = default_collection
+    elif collection != default_collection:
         print(
-            f"[hybrid_search] warning: collection '{collection}' requested, but using 'Sinde' as per instructions"
+            f"[hybrid_search] warning: collection '{collection}' requested, "
+            f"but using '{default_collection}' as per instructions"
         )
-        collection = "Sinde"
+        collection = default_collection
 
     if query_properties and isinstance(query_properties, str):
         try:
@@ -1592,11 +1612,16 @@ def image_search_vertex(
     caption: Optional[str] = None,
     limit: int = 10,
 ) -> Dict[str, Any]:
-    if collection and collection != "Sinde":
+    # Usa la collection di default configurata, mantenendo lo stesso comportamento di forzatura
+    default_collection = _get_default_collection()
+    if not collection:
+        collection = default_collection
+    elif collection != default_collection:
         print(
-            f"[image_search_vertex] warning: collection '{collection}' requested, but using 'Sinde' as per instructions"
+            f"[image_search_vertex] warning: collection '{collection}' requested, "
+            f"but using '{default_collection}' as per instructions"
         )
-        collection = "Sinde"
+        collection = default_collection
 
     image_b64 = None
 
@@ -2049,8 +2074,8 @@ async def _call_tool_request(req: types.CallToolRequest) -> types.ServerResult:
 
             clean_args: Dict[str, Any] = {}
 
-            # collection con default "Sinde"
-            clean_args["collection"] = args.get("collection") or "Sinde"
+            # collection con default preso da WEAVIATE_DEFAULT_COLLECTION (o 'Sinde')
+            clean_args["collection"] = args.get("collection") or _get_default_collection()
 
             # query obbligatoria
             q = args.get("query")
@@ -2185,6 +2210,44 @@ except Exception as e:
             break
     if app is None:
         raise RuntimeError("Cannot get FastMCP app - streamable_http_app() failed and no app found")
+
+
+# Middleware ASGI per riscrivere l'header Host prima del layer di sicurezza MCP
+class FixHostHeaderMiddleware:
+    """
+    Riscrive l'header Host se coincide con l'host pubblico derivato da _BASE_URL,
+    per evitare l'errore 'Invalid Host header' del layer di sicurezza MCP.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        try:
+            if scope.get("type") == "http":
+                headers = []
+                for name, value in scope.get("headers", []):
+                    if name == b"host":
+                        original_host = value.decode("latin-1")
+                        print(f"[fix-host] original Host: {original_host}")
+                        # Se è l'host pubblico (Render), lo rimpiazziamo con 'localhost'
+                        if _BASE_HOST and original_host.startswith(_BASE_HOST):
+                            print(f"[fix-host] rewriting Host '{original_host}' -> 'localhost'")
+                            value = b"localhost"
+                    headers.append((name, value))
+                scope["headers"] = headers
+        except Exception as e:
+            # Non dobbiamo mai bloccare la request: al massimo loggare
+            print(f"[fix-host] error while rewriting Host header: {e}")
+        await self.app(scope, receive, send)
+
+
+try:
+    app.add_middleware(FixHostHeaderMiddleware)
+    print("[mcp] FixHostHeaderMiddleware added")
+except Exception as e:
+    print(f"[mcp] warning: cannot add FixHostHeaderMiddleware: {e}")
+
 
 # Aggiungi CORS middleware se disponibile (opzionale)
 try:
