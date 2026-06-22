@@ -2,6 +2,6 @@ mcp==1.9.4
 weaviate-client==4.17.0
 starlette==0.46.2
 uvicorn==0.34.3
-vertexai==1.77.0
+vertexai==1.71.1
 requests==2.32.3
 openai==1.82.0
