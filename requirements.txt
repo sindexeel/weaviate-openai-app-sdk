@@ -1,10 +1,7 @@
-mcp>=1.0.0
-weaviate-client>=4.17.0,<5
-starlette>=0.37
-uvicorn>=0.27.0
-google-cloud-aiplatform>=1.66.0
-vertexai>=1.66.0
-requests>=2.31.0
-openai>=1.0.0
-
-google-auth>=2.35.0
+mcp==1.9.4
+weaviate-client==4.17.0
+starlette==0.46.2
+uvicorn==0.34.3
+vertexai==1.77.0
+requests==2.32.3
+openai==1.82.0
