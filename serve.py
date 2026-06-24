@@ -205,6 +205,69 @@ _VERTEX_USER_PROJECT: Optional[str] = None
 # In-memory storage per immagini caricate (temporaneo, scade dopo 1 ora)
 _UPLOADED_IMAGES: Dict[str, Dict[str, Any]] = {}
 
+# Tipi di file supportati per upload (oltre alle immagini)
+_SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".pdf", ".dxf"}
+
+
+def _pdf_to_images_b64(file_bytes: bytes) -> List[str]:
+    """Converte un PDF in una lista di immagini base64 (una per pagina)."""
+    import base64
+    import fitz  # PyMuPDF
+
+    images_b64 = []
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    for page in doc:
+        pix = page.get_pixmap(dpi=200)
+        png_bytes = pix.tobytes("png")
+        images_b64.append(base64.b64encode(png_bytes).decode("utf-8"))
+    doc.close()
+    return images_b64
+
+
+def _dxf_to_image_b64(file_bytes: bytes) -> Optional[str]:
+    """Converte un file DXF in un'immagine base64 PNG."""
+    import base64
+    import tempfile
+    import ezdxf
+    from ezdxf.addons.drawing import matplotlib as ezdxf_mpl
+
+    tmp_dxf = None
+    tmp_png = None
+    try:
+        tmp_dxf = tempfile.NamedTemporaryFile(suffix=".dxf", delete=False)
+        tmp_dxf.write(file_bytes)
+        tmp_dxf.close()
+
+        doc = ezdxf.readfile(tmp_dxf.name)
+        msp = doc.modelspace()
+
+        tmp_png = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        tmp_png.close()
+
+        fig = ezdxf_mpl.qfigure(msp)
+        fig.savefig(tmp_png.name, dpi=200, bbox_inches="tight", pad_inches=0.1)
+        import matplotlib.pyplot as plt
+        plt.close(fig)
+
+        with open(tmp_png.name, "rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8")
+    except Exception as e:
+        print(f"[dxf] conversion error: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+    finally:
+        if tmp_dxf:
+            try:
+                os.unlink(tmp_dxf.name)
+            except OSError:
+                pass
+        if tmp_png:
+            try:
+                os.unlink(tmp_png.name)
+            except OSError:
+                pass
+
 # Ultimi risultati ricevuti dal widget Sinde (visibili ai tool MCP)
 _LAST_WIDGET_RESULTS: Dict[str, Any] = {}
 
@@ -881,11 +944,14 @@ async def serve_assets(request):
 @mcp.custom_route("/upload-image", methods=["POST"])
 async def upload_image_endpoint(request):
     """
-    Endpoint HTTP per upload diretto di immagini.
+    Endpoint HTTP per upload di immagini, PDF e DXF.
+    PDF e DXF vengono convertiti in immagini PNG automaticamente.
+    Per i PDF multi-pagina, viene restituito un array di image_id (uno per pagina).
     """
     try:
         content_type = request.headers.get("content-type", "")
         image_b64 = None
+        file_ext = ""
 
         if "multipart/form-data" in content_type:
             form = await request.form()
@@ -898,8 +964,51 @@ async def upload_image_endpoint(request):
             if hasattr(file, "read"):
                 import base64
 
+                filename = getattr(file, "filename", "") or ""
+                file_ext = os.path.splitext(filename)[1].lower()
                 file_bytes = await file.read()
-                image_b64 = base64.b64encode(file_bytes).decode("utf-8")
+
+                if file_ext == ".pdf":
+                    print(f"[upload-image] converting PDF: {filename}")
+                    pages_b64 = _pdf_to_images_b64(file_bytes)
+                    if not pages_b64:
+                        return JSONResponse(
+                            {"error": "PDF conversion failed: no pages extracted"}, status_code=400
+                        )
+                    current_time = time.time()
+                    image_ids = []
+                    for page_b64 in pages_b64:
+                        page_id = str(uuid.uuid4())
+                        _UPLOADED_IMAGES[page_id] = {
+                            "image_b64": page_b64,
+                            "expires_at": current_time + 3600,
+                        }
+                        image_ids.append(page_id)
+                    expired_ids = [
+                        img_id for img_id, d in _UPLOADED_IMAGES.items()
+                        if d["expires_at"] < current_time
+                    ]
+                    for img_id in expired_ids:
+                        _UPLOADED_IMAGES.pop(img_id, None)
+                    return JSONResponse({
+                        "image_ids": image_ids,
+                        "image_id": image_ids[0],
+                        "pages": len(image_ids),
+                        "source_type": "pdf",
+                        "expires_in": 3600,
+                    })
+
+                elif file_ext == ".dxf":
+                    print(f"[upload-image] converting DXF: {filename}")
+                    converted_b64 = _dxf_to_image_b64(file_bytes)
+                    if not converted_b64:
+                        return JSONResponse(
+                            {"error": "DXF conversion failed"}, status_code=400
+                        )
+                    image_b64 = converted_b64
+
+                else:
+                    image_b64 = base64.b64encode(file_bytes).decode("utf-8")
             else:
                 return JSONResponse(
                     {"error": "Invalid file upload"}, status_code=400
@@ -944,15 +1053,20 @@ async def upload_image_endpoint(request):
         current_time = time.time()
         expired_ids = [
             img_id
-            for img_id, data in _UPLOADED_IMAGES.items()
-            if data["expires_at"] < current_time
+            for img_id, d in _UPLOADED_IMAGES.items()
+            if d["expires_at"] < current_time
         ]
         for img_id in expired_ids:
             _UPLOADED_IMAGES.pop(img_id, None)
 
-        return JSONResponse({"image_id": image_id, "expires_in": 3600})
+        resp_data: Dict[str, Any] = {"image_id": image_id, "expires_in": 3600}
+        if file_ext == ".dxf":
+            resp_data["source_type"] = "dxf"
+        return JSONResponse(resp_data)
     except Exception as e:
         print(f"[upload-image] error: {e}")
+        import traceback
+        traceback.print_exc()
         return JSONResponse({"error": str(e)}, status_code=500)
 
 

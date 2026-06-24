@@ -4,6 +4,10 @@ import React, { useState, useEffect } from "react";
 // URL base del tuo server MCP (quello con serve.py)
 const MCP_BASE_URL = "https://weaviate-openai-app-sdk.onrender.com";
 
+const DEBUG_MODE = true;
+
+const ACCEPTED_TYPES = ".png,.jpg,.jpeg,.gif,.webp,.bmp,.tiff,.pdf,.dxf";
+
 type SearchResult = {
   uuid?: string;
   properties?: {
@@ -15,6 +19,7 @@ type SearchResult = {
     [key: string]: any;
   };
   distance?: number;
+  bm25_score?: number;
 };
 
 export const ImageSearchWidget: React.FC = () => {
@@ -22,6 +27,8 @@ export const ImageSearchWidget: React.FC = () => {
   const [status, setStatus] = useState<string | null>(null);
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [debugMode, setDebugMode] = useState(false);
+  const [pdfPageCount, setPdfPageCount] = useState<number | null>(null);
   const [enlargedImage, setEnlargedImage] = useState<{
     src: string;
     alt: string;
@@ -43,6 +50,7 @@ export const ImageSearchWidget: React.FC = () => {
     setFile(f);
     setResults(null);
     setStatus(null);
+    setPdfPageCount(null);
   };
 
   const handleUploadAndSearch = async () => {
@@ -53,9 +61,15 @@ export const ImageSearchWidget: React.FC = () => {
 
     try {
       setIsLoading(true);
-      setStatus("Caricamento del progetto in corso...");
 
-      // 1️⃣ Upload immagine al tuo endpoint /upload-image (HTTP, non MCP tool)
+      const ext = file.name.split(".").pop()?.toLowerCase() || "";
+      const isPdf = ext === "pdf";
+      const isDxf = ext === "dxf";
+      const fileLabel = isPdf ? "PDF" : isDxf ? "DXF" : "progetto";
+
+      setStatus(`Caricamento ${fileLabel} in corso${isPdf ? " (conversione pagine)..." : "..."}`);
+
+      // 1) Upload file al backend /upload-image (gestisce immagini, PDF, DXF)
       const form = new FormData();
       form.append("image", file);
 
@@ -72,40 +86,66 @@ export const ImageSearchWidget: React.FC = () => {
       }
 
       const uploadData = await uploadResp.json();
-      const imageId = uploadData.image_id as string | undefined;
 
-      if (!imageId) {
+      // Per PDF multi-pagina il backend ritorna image_ids[]
+      const imageIds: string[] = uploadData.image_ids || (uploadData.image_id ? [uploadData.image_id] : []);
+      if (imageIds.length === 0) {
         throw new Error("Risposta /upload-image senza image_id");
       }
 
-      setStatus(`Progetto caricato. Avvio la ricerca tra i progetti Sinde...`);
+      if (isPdf && uploadData.pages > 1) {
+        setPdfPageCount(uploadData.pages);
+        setStatus(`PDF convertito: ${uploadData.pages} pagine. Ricerca in corso (pagina 1/${uploadData.pages})...`);
+      } else {
+        setStatus(`${fileLabel} caricato. Avvio la ricerca tra i progetti Sinde...`);
+      }
 
-      // 2️⃣ Chiama il backend HTTP /image-search (non più MCP)
-      const searchResp = await fetch(`${MCP_BASE_URL}/image-search`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          collection: "Sinde",
-          image_id: imageId,
-          limit: 10,
-        }),
+      // 2) Cerca per ogni pagina (PDF) o singola immagine
+      let allResults: SearchResult[] = [];
+
+      for (let i = 0; i < imageIds.length; i++) {
+        if (imageIds.length > 1) {
+          setStatus(`Ricerca in corso (pagina ${i + 1}/${imageIds.length})...`);
+        }
+
+        const searchResp = await fetch(`${MCP_BASE_URL}/image-search`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            collection: "Sinde",
+            image_id: imageIds[i],
+            limit: 10,
+          }),
+        });
+
+        if (!searchResp.ok) {
+          const err = await searchResp.json().catch(() => ({}));
+          throw new Error(err.error || `Errore nella ricerca (pagina ${i + 1})`);
+        }
+
+        const searchJson = await searchResp.json();
+        if (searchJson.error) {
+          throw new Error(searchJson.error || `Errore nella ricerca (pagina ${i + 1})`);
+        }
+
+        const pageResults = searchJson.results || [];
+        allResults = allResults.concat(pageResults);
+      }
+
+      // Deduplica per uuid e ordina per distanza
+      const seen = new Set<string>();
+      const dedupResults = allResults.filter((r) => {
+        const id = r.uuid || JSON.stringify(r.properties);
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return true;
       });
+      dedupResults.sort((a, b) => (a.distance ?? 1) - (b.distance ?? 1));
+      const results = dedupResults.slice(0, 10);
 
-      if (!searchResp.ok) {
-        const err = await searchResp.json().catch(() => ({}));
-        throw new Error(err.error || "Errore nella ricerca progetti");
-      }
-
-      const searchJson = await searchResp.json();
-      if (searchJson.error) {
-        throw new Error(searchJson.error || "Errore nella ricerca progetti");
-      }
-
-      // 3) Mostra i risultati nella UI
-      const results = searchJson.results || [];
       setResults(Array.isArray(results) ? results : []);
 
-      // 4) PREPARA il riassunto da mandare al modello
+      // 3) PREPARA il riassunto da mandare al modello
       const summaryParts = results.slice(0, 3).map((r: SearchResult, idx: number) => {
         const props = r.properties || {};
         const name = props.name || "(senza nome)";
@@ -121,14 +161,14 @@ export const ImageSearchWidget: React.FC = () => {
           : `Ho trovato ${results.length} risultati simili. I primi sono:\n` +
             summaryParts.join("\n");
 
-      // 5️⃣ Invia i risultati al backend MCP via HTTP
+      // 4) Invia i risultati al backend MCP via HTTP
       try {
         const resp = await fetch(`${MCP_BASE_URL}/widget-push-results`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             results_summary: resultsSummary,
-            raw_results: searchJson,
+            raw_results: { count: results.length, results },
           }),
         });
 
@@ -139,7 +179,7 @@ export const ImageSearchWidget: React.FC = () => {
             `Ricerca completata. ${results.length} progetti trovati (errore salvataggio per ChatGPT)`
           );
         } else {
-          console.log("✅ Risultati salvati lato server per ChatGPT");
+          console.log("Risultati salvati lato server per ChatGPT");
           setStatus(
             `Ricerca completata. ${results.length} progetti trovati.`
           );
@@ -161,207 +201,81 @@ export const ImageSearchWidget: React.FC = () => {
     }
   };
 
+  const getStatusClass = (): string => {
+    if (!status) return "status";
+    if (status.includes("Errore")) return "status status--error";
+    if (status.includes("completata")) return "status status--success";
+    return "status status--info";
+  };
+
   return (
-    <div
-      style={{
-        fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-        maxWidth: "900px",
-        margin: "0 auto",
-        padding: "20px",
-      }}
-    >
+    <div className="widget-root">
       {/* Header */}
-      <div style={{ marginBottom: "24px", textAlign: "center" }}>
-        <h1
-          style={{
-            margin: "0 0 8px 0",
-            fontSize: "24px",
-            fontWeight: "600",
-            color: "#1a1a1a",
-          }}
-        >
-          Ricerca progetti Sinde
-        </h1>
-        <p
-          style={{
-            margin: "0",
-            fontSize: "14px",
-            color: "#666",
-          }}
-        >
-          Carica un progetto per trovare progetti simili nella collezione Sinde
+      <div className="widget-header">
+        <h1 className="widget-title">Ricerca progetti Sinde</h1>
+        <p className="widget-subtitle">
+          Carica un progetto (immagine, PDF o DXF) per trovare progetti simili nella collezione Sinde
         </p>
+        {DEBUG_MODE && (
+          <button
+            onClick={() => setDebugMode((d) => !d)}
+            title={debugMode ? "Disattiva modalita debug" : "Attiva modalita debug"}
+            className={`debug-btn${debugMode ? " debug-btn--active" : ""}`}
+          >
+            {debugMode ? "DEBUG ON" : "DEBUG"}
+          </button>
+        )}
       </div>
 
       {/* Upload Section */}
-      <div
-        style={{
-          marginBottom: "24px",
-          padding: "20px",
-          border: "2px dashed #ddd",
-          borderRadius: "12px",
-          backgroundColor: "#fafafa",
-          textAlign: "center",
-        }}
-      >
-        <div style={{ marginBottom: "12px" }}>
+      <div className="upload-section">
+        <div className="upload-actions">
           <input
             type="file"
-            accept="image/*"
+            accept={ACCEPTED_TYPES}
             onChange={handleFileChange}
             id="file-input"
-            style={{ display: "none" }}
+            className="file-input-hidden"
           />
-          <label
-            htmlFor="file-input"
-            style={{
-              display: "inline-block",
-              padding: "12px 24px",
-              backgroundColor: "#007bff",
-              color: "white",
-              borderRadius: "8px",
-              cursor: "pointer",
-              fontSize: "14px",
-              fontWeight: "500",
-              transition: "background-color 0.2s",
-            }}
-            onMouseEnter={(e) => {
-              if (!isLoading) e.currentTarget.style.backgroundColor = "#0056b3";
-            }}
-            onMouseLeave={(e) => {
-              if (!isLoading) e.currentTarget.style.backgroundColor = "#007bff";
-            }}
-          >
+          <label htmlFor="file-input" className="btn-select-file">
             {file ? "Cambia progetto" : "Seleziona progetto"}
           </label>
         </div>
         {file && (
-          <div style={{ marginTop: "12px", fontSize: "13px", color: "#666" }}>
-            Progetto selezionato: <strong>{file.name}</strong>
+          <div className="file-selected">
+            File selezionato: <strong>{file.name}</strong>
+            {pdfPageCount && (
+              <span className="file-selected-pages">
+                ({pdfPageCount} pagine)
+              </span>
+            )}
           </div>
         )}
         <button
           onClick={handleUploadAndSearch}
           disabled={!file || isLoading}
-          style={{
-            marginTop: "12px",
-            padding: "12px 32px",
-            backgroundColor: file && !isLoading ? "#28a745" : "#ccc",
-            color: "white",
-            border: "none",
-            borderRadius: "8px",
-            fontSize: "14px",
-            fontWeight: "500",
-            cursor: file && !isLoading ? "pointer" : "not-allowed",
-            transition: "background-color 0.2s",
-          }}
-          onMouseEnter={(e) => {
-            if (file && !isLoading) {
-              e.currentTarget.style.backgroundColor = "#218838";
-            }
-          }}
-          onMouseLeave={(e) => {
-            if (file && !isLoading) {
-              e.currentTarget.style.backgroundColor = "#28a745";
-            }
-          }}
+          className="btn-search"
         >
           {isLoading ? "Ricerca in corso..." : "Cerca progetti simili"}
         </button>
       </div>
 
       {/* Status */}
-      {status && (
-        <div
-          style={{
-            marginBottom: "24px",
-            padding: "12px 16px",
-            borderRadius: "8px",
-            backgroundColor: status.includes("Errore")
-              ? "#f8d7da"
-              : status.includes("completata")
-              ? "#d4edda"
-              : "#d1ecf1",
-            color: status.includes("Errore")
-              ? "#721c24"
-              : status.includes("completata")
-              ? "#155724"
-              : "#0c5460",
-            fontSize: "14px",
-          }}
-        >
-          {status}
-        </div>
-      )}
+      {status && <div className={getStatusClass()}>{status}</div>}
 
       {/* Results Grid */}
       {results && results.length > 0 && (
-        <div style={{ marginTop: "24px" }}>
-          <h2
-            style={{
-              margin: "0 0 16px 0",
-              fontSize: "20px",
-              fontWeight: "600",
-              color: "#1a1a1a",
-            }}
-          >
-            Progetti trovati ({results.length})
-          </h2>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-              gap: "16px",
-            }}
-          >
+        <div className="results-section">
+          <h2 className="results-title">Progetti trovati ({results.length})</h2>
+          <div className="results-grid">
             {results.map((r, idx) => (
-              <div
-                key={idx}
-                style={{
-                  border: "1px solid #e0e0e0",
-                  borderRadius: "12px",
-                  padding: "16px",
-                  backgroundColor: "white",
-                  boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
-                  transition: "transform 0.2s, box-shadow 0.2s",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = "translateY(-2px)";
-                  e.currentTarget.style.boxShadow = "0 4px 8px rgba(0,0,0,0.15)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = "translateY(0)";
-                  e.currentTarget.style.boxShadow = "0 2px 4px rgba(0,0,0,0.1)";
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: "12px",
-                    color: "#666",
-                    marginBottom: "8px",
-                    fontFamily: "monospace",
-                  }}
-                >
-                  #{idx + 1}
-                </div>
-                
+              <div key={idx} className="result-card">
+                <div className="result-index">#{idx + 1}</div>
+
                 {/* Anteprima immagine da image_b64 */}
                 {r.properties?.image_b64 && (
                   <div
-                    style={{
-                      marginBottom: "12px",
-                      borderRadius: "8px",
-                      overflow: "hidden",
-                      backgroundColor: "#f5f5f5",
-                      border: "1px solid #e0e0e0",
-                      minHeight: "150px",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      position: "relative",
-                      cursor: "pointer",
-                      transition: "transform 0.2s, box-shadow 0.2s",
-                    }}
+                    className="result-preview"
                     onClick={() => {
                       if (r.properties?.image_b64) {
                         setEnlargedImage({
@@ -370,97 +284,58 @@ export const ImageSearchWidget: React.FC = () => {
                         });
                       }
                     }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.transform = "scale(1.02)";
-                      e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.15)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.transform = "scale(1)";
-                      e.currentTarget.style.boxShadow = "none";
-                    }}
                   >
                     <img
                       src={`data:image/png;base64,${r.properties.image_b64}`}
                       alt={r.properties?.name || `Anteprima pagina ${r.properties?.page_index || ""}`}
-                      style={{
-                        width: "100%",
-                        height: "auto",
-                        display: "block",
-                        maxHeight: "200px",
-                        objectFit: "contain",
-                        pointerEvents: "none",
-                      }}
                       onError={(e) => {
-                        // Se l'immagine fallisce, nascondi il container
                         const parent = e.currentTarget.parentElement;
-                        if (parent) {
-                          parent.style.display = "none";
-                        }
+                        if (parent) parent.style.display = "none";
                       }}
                     />
-                    {/* Icona zoom sovrapposta */}
-                    <div
-                      style={{
-                        position: "absolute",
-                        top: "8px",
-                        right: "8px",
-                        backgroundColor: "rgba(0, 0, 0, 0.6)",
-                        borderRadius: "50%",
-                        width: "32px",
-                        height: "32px",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        color: "white",
-                        fontSize: "16px",
-                        pointerEvents: "none",
-                      }}
-                    >
-                      🔍
-                    </div>
+                    <div className="preview-zoom-icon">🔍</div>
                   </div>
                 )}
-                
+
                 {r.properties?.name && (
-                  <h3
-                    style={{
-                      margin: "0 0 12px 0",
-                      fontSize: "16px",
-                      fontWeight: "600",
-                      color: "#1a1a1a",
-                    }}
-                  >
-                    {r.properties.name}
-                  </h3>
+                  <h3 className="result-name">{r.properties.name}</h3>
                 )}
-                <div style={{ fontSize: "13px", color: "#555", lineHeight: "1.6" }}>
+                <div className="result-details">
                   {r.properties?.source_pdf && (
-                    <div style={{ marginBottom: "6px" }}>
+                    <div className="result-detail-row">
                       <strong>PDF:</strong> {r.properties.source_pdf}
                     </div>
                   )}
                   {typeof r.properties?.page_index === "number" && (
-                    <div style={{ marginBottom: "6px" }}>
+                    <div className="result-detail-row">
                       <strong>Pagina:</strong> {r.properties.page_index}
                     </div>
                   )}
                   {r.properties?.mediaType && (
-                    <div style={{ marginBottom: "6px" }}>
+                    <div className="result-detail-row">
                       <strong>Tipo:</strong> {r.properties.mediaType}
                     </div>
                   )}
-                  {typeof r.distance === "number" && (
-                    <div
-                      style={{
-                        marginTop: "12px",
-                        padding: "6px 10px",
-                        backgroundColor: "#f0f0f0",
-                        borderRadius: "6px",
-                        fontSize: "12px",
-                      }}
-                    >
-                      <strong>Similarità:</strong> {(1 - r.distance).toFixed(3)}
+                  {debugMode ? (
+                    <div className="debug-panel">
+                      <div className="debug-panel-title">DEBUG</div>
+                      <div><strong>uuid:</strong> {r.uuid ?? "---"}</div>
+                      {typeof r.distance === "number" && (
+                        <>
+                          <div><strong>distance:</strong> {r.distance.toFixed(6)}</div>
+                          <div><strong>similarity (1-d):</strong> {(1 - r.distance).toFixed(6)}</div>
+                        </>
+                      )}
+                      {typeof r.bm25_score === "number" && (
+                        <div><strong>bm25_score:</strong> {r.bm25_score.toFixed(6)}</div>
+                      )}
                     </div>
+                  ) : (
+                    typeof r.distance === "number" && (
+                      <div className="similarity-badge">
+                        <strong>Similarita:</strong> {(1 - r.distance).toFixed(3)}
+                      </div>
+                    )
                   )}
                 </div>
               </div>
@@ -470,84 +345,26 @@ export const ImageSearchWidget: React.FC = () => {
       )}
 
       {results && results.length === 0 && (
-        <div
-          style={{
-            marginTop: "24px",
-            padding: "24px",
-            textAlign: "center",
-            backgroundColor: "#f8f9fa",
-            borderRadius: "12px",
-            color: "#666",
-          }}
-        >
-          Nessun progetto trovato.
-        </div>
+        <div className="empty-results">Nessun progetto trovato.</div>
       )}
 
       {/* Modal per immagine ingrandita */}
       {enlargedImage && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: "rgba(0, 0, 0, 0.9)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 10000,
-            padding: "20px",
-            cursor: "pointer",
-          }}
-          onClick={() => setEnlargedImage(null)}
-        >
-          {/* Pulsante chiudi */}
+        <div className="modal-overlay" onClick={() => setEnlargedImage(null)}>
           <button
             onClick={(e) => {
               e.stopPropagation();
               setEnlargedImage(null);
             }}
-            style={{
-              position: "absolute",
-              top: "20px",
-              right: "20px",
-              backgroundColor: "rgba(255, 255, 255, 0.2)",
-              border: "none",
-              borderRadius: "50%",
-              width: "40px",
-              height: "40px",
-              color: "white",
-              fontSize: "24px",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              transition: "background-color 0.2s",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.3)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.2)";
-            }}
+            className="modal-close"
             aria-label="Chiudi"
           >
-            ×
+            x
           </button>
-
-          {/* Immagine ingrandita */}
           <img
             src={enlargedImage.src}
             alt={enlargedImage.alt}
-            style={{
-              maxWidth: "90%",
-              maxHeight: "90%",
-              objectFit: "contain",
-              borderRadius: "8px",
-              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.5)",
-            }}
+            className="modal-image"
             onClick={(e) => e.stopPropagation()}
           />
         </div>

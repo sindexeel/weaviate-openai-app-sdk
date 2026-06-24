@@ -5,3 +5,6 @@ uvicorn==0.34.3
 vertexai==1.71.1
 requests==2.32.3
 openai==1.82.0
+PyMuPDF==1.25.5
+ezdxf==1.4.2
+matplotlib==3.10.3
