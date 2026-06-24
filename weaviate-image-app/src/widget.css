@@ -259,6 +259,21 @@ body {
   color: light-dark(#856404, #ffc107);
 }
 
+.test-label--expected {
+  color: light-dark(#198754, #75b798);
+  font-weight: 700;
+}
+
+.test-label--unwanted {
+  color: light-dark(#dc3545, #ea868f);
+  font-weight: 700;
+}
+
+.test-label--neutral {
+  color: light-dark(#6c757d, #adb5bd);
+  font-weight: 700;
+}
+
 .similarity-badge {
   margin-top: 12px;
   padding: 6px 10px;

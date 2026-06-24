@@ -886,6 +886,22 @@ async def health(_request):
     return JSONResponse({"status": "ok", "service": "weaviate-mcp-http"})
 
 
+@mcp.custom_route("/test_cases.json", methods=["GET"])
+async def serve_test_cases(_request):
+    from starlette.responses import FileResponse
+
+    test_cases_path = _WIDGET_DIST_DIR / "test_cases.json"
+    if not test_cases_path.exists():
+        test_cases_path = _BASE_DIR / "weaviate-image-app" / "public" / "test_cases.json"
+    if not test_cases_path.exists():
+        return JSONResponse([], headers={"Access-Control-Allow-Origin": "*"})
+    return FileResponse(
+        test_cases_path,
+        media_type="application/json",
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
+
+
 @mcp.custom_route("/assets/{file_path:path}", methods=["GET"])
 async def serve_assets(request):
     from starlette.responses import FileResponse

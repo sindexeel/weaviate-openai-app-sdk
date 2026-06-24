@@ -8,6 +8,12 @@ const DEBUG_MODE = true;
 
 const ACCEPTED_TYPES = ".png,.jpg,.jpeg,.gif,.webp,.bmp,.tiff,.pdf,.dxf";
 
+type TestCase = {
+  input: string;
+  expected: string[];
+  unwanted: string[];
+};
+
 type SearchResult = {
   uuid?: string;
   properties?: {
@@ -28,11 +34,42 @@ export const ImageSearchWidget: React.FC = () => {
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
+  const [testCases, setTestCases] = useState<TestCase[]>([]);
   const [pdfPageCount, setPdfPageCount] = useState<number | null>(null);
   const [enlargedImage, setEnlargedImage] = useState<{
     src: string;
     alt: string;
   } | null>(null);
+
+  // Carica i test case dal JSON esterno (solo se DEBUG_MODE abilitato)
+  useEffect(() => {
+    if (!DEBUG_MODE) return;
+    fetch(`${MCP_BASE_URL}/test_cases.json`)
+      .then((r) => r.json())
+      .then((data: TestCase[]) => setTestCases(data))
+      .catch(() => {});
+  }, []);
+
+  // Trova il test case corrispondente al file caricato (match parziale sul nome)
+  const activeTestCase = debugMode && file
+    ? testCases.find((tc) => file.name.includes(tc.input))
+    : null;
+
+  const getTestEmoji = (name: string): string | null => {
+    if (!activeTestCase) return null;
+    if (name.includes(activeTestCase.input)) return "OK";
+    if (activeTestCase.expected.some((e) => name.includes(e))) return "OK";
+    if (activeTestCase.unwanted.some((u) => name.includes(u))) return "NO";
+    return null;
+  };
+
+  const getTestLabel = (name: string): "expected" | "unwanted" | "neutral" | null => {
+    if (!activeTestCase) return null;
+    if (name.includes(activeTestCase.input)) return "expected";
+    if (activeTestCase.expected.some((e) => name.includes(e))) return "expected";
+    if (activeTestCase.unwanted.some((u) => name.includes(u))) return "unwanted";
+    return "neutral";
+  };
 
   // Chiudi il modal con ESC
   useEffect(() => {
@@ -298,7 +335,14 @@ export const ImageSearchWidget: React.FC = () => {
                 )}
 
                 {r.properties?.name && (
-                  <h3 className="result-name">{r.properties.name}</h3>
+                  <h3 className="result-name">
+                    {debugMode && getTestEmoji(r.properties.name) !== null && (
+                      <span style={{ marginRight: "6px" }}>
+                        {getTestEmoji(r.properties.name) === "OK" ? "✅" : "❌"}
+                      </span>
+                    )}
+                    {r.properties.name}
+                  </h3>
                 )}
                 <div className="result-details">
                   {r.properties?.source_pdf && (
@@ -329,6 +373,17 @@ export const ImageSearchWidget: React.FC = () => {
                       {typeof r.bm25_score === "number" && (
                         <div><strong>bm25_score:</strong> {r.bm25_score.toFixed(6)}</div>
                       )}
+                      {(() => {
+                        const dn = r.properties?.name || r.properties?.source_pdf;
+                        return dn && getTestLabel(dn) !== null ? (
+                          <div>
+                            <strong>output:</strong>{" "}
+                            <span className={`test-label--${getTestLabel(dn)}`}>
+                              {getTestLabel(dn)}
+                            </span>
+                          </div>
+                        ) : null;
+                      })()}
                     </div>
                   ) : (
                     typeof r.distance === "number" && (
